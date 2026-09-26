@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Added repository-level AGENTS.md guardrails: reuse proven Basler camera code first, keep hardware tests short, and prioritize the processing experiment.
+- Aligned ExposureAuto/ExposureTime and GainAuto/Gain handling with the existing Basler test applications; automatic-loop runtime values are no longer restored/written as if they were manual settings.
+- Made Original view a true camera/recording baseline with no continuous selected-method processing load.
+- Added one-click local updater for the existing editable Windows installation and Desktop shortcut.
 - Reworked live camera delivery to use a bounded mailbox instead of queueing full-resolution frame payloads into the Qt event loop.
 - Coalesced heavy processing results so only the newest result can wait for the GUI; added result/camera-buffer drop diagnostics.
 - Bounded live frame history to prevent multi-gigabyte growth on multi-megapixel streams.
