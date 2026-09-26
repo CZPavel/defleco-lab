@@ -414,7 +414,12 @@ class MainWindow(QtWidgets.QMainWindow):
         return True
 
     def closeEvent(self, event):
-        self._stop()
+        if not self._stop():
+            self.statusBar().showMessage(
+                "Camera worker did not stop cleanly; close postponed to protect camera state"
+            )
+            event.ignore()
+            return
         try:
             self._record_stop()
         except (OSError, TimeoutError) as exc:
