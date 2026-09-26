@@ -123,9 +123,26 @@ class VisualizationTransform:
 def _original_rgb(original: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
     source = np.asarray(original)
     if source.ndim == 2:
-        values = np.nan_to_num(source.astype(np.float32))
-        lo, hi = float(values.min()), float(values.max())
-        values = np.clip((values - lo) * 255.0 / max(hi - lo, 1e-12), 0, 255).astype(np.uint8)
+        # Preserve native Mono8 levels. Per-frame min/max stretching makes live
+        # overlays flicker and destroys brightness comparability between patterns.
+        if source.dtype == np.uint8:
+            values = source
+        else:
+            values32 = np.nan_to_num(source.astype(np.float32))
+            if np.issubdtype(source.dtype, np.integer):
+                info = np.iinfo(source.dtype)
+                values = np.clip(
+                    (values32 - info.min) * 255.0 / max(info.max - info.min, 1),
+                    0,
+                    255,
+                ).astype(np.uint8)
+            else:
+                lo, hi = float(values32.min()), float(values32.max())
+                values = np.clip(
+                    (values32 - lo) * 255.0 / max(hi - lo, 1e-12),
+                    0,
+                    255,
+                ).astype(np.uint8)
         source = cv2.cvtColor(values, cv2.COLOR_GRAY2RGB)
     elif source.ndim == 3 and source.shape[2] == 3:
         source = (
