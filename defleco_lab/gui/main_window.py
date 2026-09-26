@@ -447,7 +447,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.last_original = latest.image
         if self.tabs.currentIndex() == 0:
             self.original.set_array(latest.image)
-        self._process()
+        else:
+            self._process()
 
     def _next_frame(self) -> None:
         displayed_index = self.replay_index
@@ -477,7 +478,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self.original.set_array(packet.image)
         if self.recorder:
             self.recorder.append(packet)
-        self._process()
+        if self.tabs.currentIndex() != 0:
+            self._process()
 
     def _discover_cameras(self) -> None:
         self.camera_combo.clear()
@@ -512,6 +514,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.camera_metrics = dict(metrics)
         if self.source_combo.currentText() == "Basler":
             self.received_fps = float(metrics.get("received_fps", 0.0))
+        if self.tabs.currentIndex() == 0:
+            self._show_original_metrics()
 
     def _process(self) -> None:
         mid = self.method_combo.currentData() if hasattr(self, "method_combo") else None
@@ -635,6 +639,13 @@ class MainWindow(QtWidgets.QMainWindow):
             f"{recorder_state}{roi_summary}"
         )
 
+    def _show_original_metrics(self) -> None:
+        self.metrics.setText(
+            f"{self.source_combo.currentText()} {self.received_fps:.1f} FPS"
+            " | Original view | Processing idle"
+            f" | Cam-buffer drops {int(self.camera_metrics.get('buffer_drops', 0))}"
+        )
+
     @QtCore.Slot(object)
     def _visualization_changed(self, settings: VisualizationSettings) -> None:
         self.visualization_settings = settings
@@ -642,13 +653,18 @@ class MainWindow(QtWidgets.QMainWindow):
 
     @QtCore.Slot(int)
     def _active_view_changed(self, index: int) -> None:
-        if index == 0 and self.last_original is not None:
-            self.original.set_array(self.last_original)
+        if index == 0:
+            if self.last_original is not None:
+                self.original.set_array(self.last_original)
+            self._show_original_metrics()
             return
-        if index == 2 and self.last_result is not None and not self.last_result.intermediates:
+
+        # Original is deliberately a camera/recording baseline. Processing starts
+        # only when a processed/debug view is requested.
+        if self.history:
             self._process()
-            return
-        self._schedule_visualization()
+        else:
+            self._schedule_visualization()
 
     def _schedule_visualization(self) -> None:
         if self.tabs.currentIndex() == 0:

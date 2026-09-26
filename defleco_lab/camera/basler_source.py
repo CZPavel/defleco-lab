@@ -46,15 +46,31 @@ def discover_cameras() -> list[CameraDescriptor]:
 class BaslerSource:
     """Exact-target, session-only Basler acquisition adapter.
 
-    The source establishes a temporary free-run acquisition state for live preview
-    and restores every acquisition node that it changes when the camera is closed.
-    This makes live mode robust against a camera left in software/hardware trigger
-    mode by another tool without writing persistent User Sets.
+    Camera parameter handling intentionally follows the already proven patterns
+    used by CZPavel/basler-camera-encoder and CZPavel/basler-ace2-gige-tester:
+    auto-exposure/auto-gain state is treated separately from the current numeric
+    ExposureTime/Gain value, ROI changes are ordered defensively, and temporary
+    session changes are restored on close.
     """
 
+    # User-editable temporary values exposed by Defleco LAB.
     SAFE_PARAMETERS = (
         "ExposureTime",
         "Gain",
+        "AcquisitionFrameRate",
+        "Width",
+        "Height",
+        "OffsetX",
+        "OffsetY",
+    )
+
+    # Runtime camera state that must be understood for safe rollback/readback.
+    PROFILE_PARAMETERS = (
+        "ExposureAuto",
+        "ExposureTime",
+        "GainAuto",
+        "Gain",
+        "AcquisitionFrameRateEnable",
         "AcquisitionFrameRate",
         "Width",
         "Height",
@@ -88,17 +104,43 @@ class BaslerSource:
 
     def snapshot_parameters(self) -> dict[str, Any]:
         values: dict[str, Any] = {}
-        for name in self.SAFE_PARAMETERS:
+        for name in self.PROFILE_PARAMETERS:
             node = self._node(name)
             if node is not None and node.IsReadable():
                 values[name] = node.Value
         return values
 
+    def public_readback(self) -> dict[str, Any]:
+        """Sanitized runtime state useful for diagnostics, never unique camera identity."""
+        resulting_fps = None
+        for name in ("BslResultingAcquisitionFrameRate", "ResultingFrameRate"):
+            node = self._node(name)
+            if node is not None and node.IsReadable():
+                try:
+                    value = float(node.Value)
+                except (TypeError, ValueError):
+                    continue
+                if np.isfinite(value) and value > 0:
+                    resulting_fps = value
+                    break
+        return {
+            "model": self.descriptor.model,
+            "width": _read(self.camera, "Width"),
+            "height": _read(self.camera, "Height"),
+            "pixel_format": _read(self.camera, "PixelFormat"),
+            "exposure_auto": _read(self.camera, "ExposureAuto"),
+            "exposure_us": _read(self.camera, "ExposureTime"),
+            "gain_auto": _read(self.camera, "GainAuto"),
+            "gain": _read(self.camera, "Gain"),
+            "configured_fps": _read(self.camera, "AcquisitionFrameRate"),
+            "resulting_fps": resulting_fps,
+        }
+
     def prepare_free_run(self) -> dict[str, Any]:
         """Temporarily configure free-running continuous acquisition.
 
         Only volatile GenICam nodes are changed. Original values are remembered and
-        restored in close(). Unsupported nodes are simply skipped.
+        restored in close(). Unsupported nodes are skipped.
         """
         report: dict[str, Any] = {}
 
@@ -130,23 +172,47 @@ class BaslerSource:
                     trigger_mode.Value = "Off"
                 report["TriggerMode"] = trigger_mode.Value
 
-        # Keep FrameStart selected while the session is live. Some cameras expose
-        # TriggerMode per TriggerSelector; restoring the original selector before
-        # starting could re-enable a triggered acquisition path.
         if original_selector is not None:
             report["TriggerSelector"] = _read(self.camera, "TriggerSelector")
 
         return report
 
     def apply_temporary(self, changes: dict[str, Any]) -> dict[str, Any]:
+        """Apply user-requested session-only values defensively.
+
+        ExposureTime/Gain are not written while their corresponding automatic
+        control loop is active. This mirrors the proven camera-profile behavior
+        from basler-ace2-gige-tester and prevents a runtime AE/AGC value from being
+        mistaken for a manual configuration value.
+        """
         report: dict[str, Any] = {}
         unknown = set(changes) - set(self.SAFE_PARAMETERS)
         if unknown:
             raise ValueError(f"Unsupported temporary parameter: {min(unknown)}")
 
-        ordered = [name for name in self.SAFE_PARAMETERS if name in changes]
-        # Width/height can constrain offsets. Move offsets to zero first, then apply size,
-        # then the requested offsets. All values remain session-only and are rolled back.
+        changes = dict(changes)
+        exposure_auto = self._read_node_value("ExposureAuto")
+        if "ExposureTime" in changes and exposure_auto not in (None, "Off"):
+            report["ExposureTime"] = f"skipped (ExposureAuto={exposure_auto})"
+            changes.pop("ExposureTime")
+
+        gain_auto = self._read_node_value("GainAuto")
+        if "Gain" in changes and gain_auto not in (None, "Off"):
+            report["Gain"] = f"skipped (GainAuto={gain_auto})"
+            changes.pop("Gain")
+
+        if "AcquisitionFrameRate" in changes:
+            enabled = self._node("AcquisitionFrameRateEnable")
+            if enabled is not None and enabled.IsReadable() and enabled.IsWritable():
+                try:
+                    if not bool(enabled.Value):
+                        enabled.Value = True
+                        report["AcquisitionFrameRateEnable"] = True
+                except Exception as exc:
+                    # Some cameras expose the node but manage it implicitly.
+                    report["AcquisitionFrameRateEnable"] = f"unchanged ({exc})"
+
+        # Proven ROI ordering: offsets low first, size, then requested offsets.
         roi_changes = any(name in changes for name in self._ROI_ORDER)
         if roi_changes:
             for name in ("OffsetX", "OffsetY"):
@@ -154,8 +220,13 @@ class BaslerSource:
                 if node is not None and node.IsWritable():
                     node.Value = self._quantize(node, 0)
 
-        ordered = [name for name in ordered if name not in self._ROI_ORDER]
-        ordered += [name for name in ("Width", "Height", "OffsetX", "OffsetY") if name in changes]
+        ordered = [
+            name
+            for name in ("ExposureTime", "Gain", "AcquisitionFrameRate", "Width", "Height")
+            if name in changes
+        ]
+        ordered += [name for name in ("OffsetX", "OffsetY") if name in changes]
+
         for name in ordered:
             requested = changes[name]
             node = self._node(name)
@@ -172,7 +243,6 @@ class BaslerSource:
         return report
 
     def _node(self, name: str) -> Any | None:
-        """Return a parameter proxy only when the live node map contains it."""
         if self.camera is None:
             return None
         try:
@@ -180,6 +250,15 @@ class BaslerSource:
             if raw is None:
                 return None
             return getattr(self.camera, name)
+        except Exception:
+            return None
+
+    def _read_node_value(self, name: str) -> Any:
+        node = self._node(name)
+        if node is None or not node.IsReadable():
+            return None
+        try:
+            return node.Value
         except Exception:
             return None
 
@@ -270,6 +349,59 @@ class BaslerSource:
                 except Exception as exc:
                     failures.append(f"AcquisitionMode: {exc}")
 
+    def _restore_profile(self, failures: list[str]) -> None:
+        """Restore baseline using the same auto/manual semantics as proven tools."""
+        if not self._baseline:
+            return
+
+        # Geometry first: zero offsets, restore size, then exact offsets.
+        for name in ("OffsetX", "OffsetY"):
+            node = self._node(name)
+            if node is not None and node.IsWritable():
+                try:
+                    node.Value = self._quantize(node, 0)
+                except Exception as exc:
+                    failures.append(f"{name}: {exc}")
+
+        for name in ("Width", "Height", "OffsetX", "OffsetY"):
+            if name not in self._baseline:
+                continue
+            node = self._node(name)
+            if node is not None and node.IsWritable():
+                try:
+                    node.Value = self._baseline[name]
+                except Exception as exc:
+                    failures.append(f"{name}: {exc}")
+
+        # Restore automatic modes before deciding whether numeric values are manual.
+        for name in ("ExposureAuto", "GainAuto"):
+            if name not in self._baseline:
+                continue
+            node = self._node(name)
+            if node is not None and node.IsWritable():
+                try:
+                    node.Value = self._baseline[name]
+                except Exception as exc:
+                    failures.append(f"{name}: {exc}")
+
+        if self._baseline.get("ExposureAuto") in (None, "Off"):
+            self._restore_value("ExposureTime", failures)
+        if self._baseline.get("GainAuto") in (None, "Off"):
+            self._restore_value("Gain", failures)
+
+        self._restore_value("AcquisitionFrameRate", failures)
+        self._restore_value("AcquisitionFrameRateEnable", failures)
+
+    def _restore_value(self, name: str, failures: list[str]) -> None:
+        if name not in self._baseline:
+            return
+        node = self._node(name)
+        if node is not None and node.IsWritable():
+            try:
+                node.Value = self._baseline[name]
+            except Exception as exc:
+                failures.append(f"{name}: {exc}")
+
     def close(self) -> list[str]:
         failures: list[str] = []
         if self.camera is None:
@@ -277,32 +409,7 @@ class BaslerSource:
         try:
             if self.camera.IsGrabbing():
                 self.camera.StopGrabbing()
-            if any(name in self._baseline for name in self._ROI_ORDER):
-                for name in ("OffsetX", "OffsetY"):
-                    node = self._node(name)
-                    if node is not None and node.IsWritable():
-                        try:
-                            node.Value = self._quantize(node, 0)
-                        except Exception as exc:
-                            failures.append(f"{name}: {exc}")
-            restore_order = [
-                name
-                for name in reversed(self.SAFE_PARAMETERS)
-                if name in self._baseline and name not in self._ROI_ORDER
-            ]
-            restore_order += [
-                name
-                for name in ("Width", "Height", "OffsetX", "OffsetY")
-                if name in self._baseline
-            ]
-            for name in restore_order:
-                value = self._baseline[name]
-                node = self._node(name)
-                if node is not None and node.IsWritable():
-                    try:
-                        node.Value = value
-                    except Exception as exc:  # hardware/API error must be reported
-                        failures.append(f"{name}: {exc}")
+            self._restore_profile(failures)
             self._restore_free_run(failures)
         finally:
             if self.camera.IsOpen():

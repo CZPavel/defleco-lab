@@ -138,3 +138,26 @@ def test_visualization_range_excludes_invalid_mask_pixels() -> None:
     valid = np.array([[False, False], [True, True]])
     rendered = transform.render(response, settings, valid_mask=valid)
     assert rendered.display_range == (10.0, 20.0)
+
+
+
+def test_original_tab_does_not_submit_processing(monkeypatch) -> None:
+    from defleco_lab.camera.frame_packet import FramePacket
+    from defleco_lab.gui.main_window import MainWindow
+
+    app = _app()
+    window = MainWindow()
+    calls = []
+    monkeypatch.setattr(window.processor, "submit", lambda request: calls.append(request))
+    packet = FramePacket(np.zeros((32, 32), np.uint8), 1, 1, source="synthetic")
+
+    window.tabs.setCurrentIndex(0)
+    window._receive_packet(packet)
+    assert calls == []
+
+    window.tabs.setCurrentIndex(1)
+    app.processEvents()
+    assert calls
+
+    window.close()
+    app.processEvents()
