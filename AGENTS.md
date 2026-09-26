@@ -2,124 +2,110 @@
 
 ## Project priority
 
-Defleco LAB is primarily an experimental image-processing laboratory for evaluating reflected-pattern / deflectometry methods. The novel work is the processing and evaluation layer, not basic Basler camera plumbing.
+Defleco LAB is an experimental image-processing laboratory for reflected-pattern /
+deflectometry research. The main value is fast, reliable comparison of processing
+methods on real and recorded data.
 
-When working on this repository, optimize first for:
-1. reliable live acquisition;
-2. responsive GUI;
-3. reproducible record/replay;
-4. correct and inspectable processing results;
-5. fast comparison of pattern + algorithm combinations.
+## General execution contract
 
-Do not spend substantial time re-solving camera control that already exists elsewhere.
+Work delta-first, not from scratch.
 
-## Reuse-first rule for Basler hardware
+Before implementing anything:
+1. identify what the requested outcome actually changes;
+2. identify existing code, prior decisions, referenced repositories, scripts, data,
+   tests, or documentation that already solve part of it;
+3. reuse those parts instead of recreating them;
+4. implement only the missing delta;
+5. validate only the behavior affected by that delta.
 
-Before changing or adding Basler camera behavior, inspect and reuse the proven implementation patterns from:
+If the task explicitly points to an existing implementation, treat it as the
+default source of truth for that functionality unless there is a demonstrated
+reason not to reuse it.
 
-- https://github.com/CZPavel/basler-camera-encoder
-  - camera discovery and exact identity selection;
-  - CameraReadback;
-  - ExposureAuto / ExposureTime distinction;
-  - GainAuto / Gain distinction;
-  - resulting FPS;
-  - read-only runtime snapshot;
-  - acquisition worker patterns.
+Do not create a parallel abstraction, helper, wrapper, test harness, or rewritten
+implementation merely because it is convenient for the current task.
 
-- https://github.com/CZPavel/basler-ace2-gige-tester
-  - defensive GenICam helpers;
-  - trigger handling;
-  - camera profile snapshot / restore;
-  - ROI, binning and decimation ordering;
-  - temporary profile changes;
-  - rollback;
-  - low-load/live preview behavior.
+## Context and data reuse
 
-Do not invent a new camera abstraction or new parameter semantics if one of those repositories already contains a working implementation that can be adapted.
+Do not repeatedly re-read unchanged material without a concrete reason.
 
-When copying/refactoring MIT-licensed logic, preserve attribution in NOTICE where appropriate.
+Prefer:
+- previously established findings when the source has not changed;
+- targeted reads of changed files or unresolved code paths;
+- diffs and exact call sites over repository-wide rescans;
+- recorded/replay data over repeated hardware acquisition when the same frames are
+  sufficient for the question.
 
-## Exposure / gain semantics
+Re-read or re-test only when:
+- the relevant source changed;
+- the previous result is uncertain;
+- a dependency changed;
+- the new task exercises a different code path;
+- or the user explicitly asks for fresh verification.
 
-Never interpret ExposureTime or Gain alone as the complete camera configuration.
+## Validation economy
 
-Always consider:
-- ExposureAuto
-- ExposureTime
-- GainAuto
-- Gain
+Tests are evidence, not ceremony.
 
-When ExposureAuto is not Off, ExposureTime may be the current output of the automatic control loop rather than a manually configured constant.
-When GainAuto is not Off, treat Gain analogously.
+A commit SHA, green CI, successful import, GUI startup, or device discovery proves
+only that specific fact. Do not present those as proof that the application's
+primary function works.
 
-Do not write ExposureTime while ExposureAuto is active unless the user explicitly requests a transition to manual exposure.
-Do not write Gain while GainAuto is active unless explicitly requested.
+For each change, choose the smallest test that answers the real question. Prefer
+one meaningful behavioral test over many broad low-value checks.
 
-## Camera safety
+Do not, unless explicitly requested:
+- rerun unchanged hardware validation;
+- run long soak, stress, resize, click, or GUI-torture loops;
+- cycle unrelated methods or parameters;
+- benchmark unchanged code;
+- regenerate screenshots or reports unrelated to the requested behavior;
+- repeat tests whose result is already established and whose dependencies did not
+  change.
 
-Do not modify persistent camera state unless the user explicitly asks for it.
-
-Do not:
-- write persistent User Sets;
-- use Force IP;
-- update firmware;
-- change persistent network configuration;
-- drive GPIO outputs.
-
-Temporary session changes must be restored on clean shutdown where practical.
-
-## Processing/runtime rules
-
-The GUI must remain responsive even if processing cannot keep up.
-
-Use:
-- bounded acquisition buffers;
-- latest-wins processing;
-- bounded result delivery;
-- bounded live frame history;
-- explicit processing/display scale.
-
-Dropping stale processing frames is acceptable.
-Accumulating unbounded latency is not.
-
-Do not compute hidden heavy views or intermediate maps unless they are needed.
-
-The Original view is a camera/recording baseline. Do not run the selected processing method continuously while only the Original tab is active.
+When a failure is found, test the shortest path from cause to user-visible effect.
 
 ## Definition of done
 
-A task is not complete just because the GUI starts, CI is green, or a camera can be opened.
+Completion is defined by the requested behavior, not by activity volume.
 
-For processing work, acceptance must exercise the actual processing path:
-- produce a non-empty numerical response from the changed method;
-- verify a known synthetic disturbance changes the response in the expected region where practical;
-- verify the Processed view can display the selected primary output;
-- use recorded real frames/replay for algorithm comparisons once such data exist.
+For processing changes, acceptance should exercise the actual processing path and
+show that the selected output responds meaningfully to a known synthetic or
+recorded disturbance where practical.
 
-For camera work, reuse the proven camera layer first and test only the changed camera behavior. Do not spend the task budget re-validating unrelated camera functions.
+For GUI changes, verify only the affected interaction and its user-visible result.
 
-Prefer end-to-end evidence for the project's primary purpose over broad peripheral testing.
+For camera changes, reuse the established camera path already present in the
+project and test only the changed camera behavior.
 
-## Testing scope
+For documentation-only changes, do not run runtime or hardware tests unless the
+documentation change itself depends on them.
 
-Default hardware validation should be short and targeted.
+## Runtime rules
 
-Unless the user explicitly requests a soak/stress test:
-- do not run long GUI torture tests;
-- do not repeatedly move/resize windows for minutes;
-- do not cycle every processing method;
-- keep a normal hardware smoke test around 1–2 minutes;
-- test only the functionality changed by the current task.
+The GUI must remain responsive even if processing cannot keep up.
 
-For algorithm development, prioritize recorded real data and replay over repeated live-camera retesting.
+Use bounded acquisition/history/result paths and latest-wins processing where
+appropriate. Do not compute hidden expensive outputs that are not being used.
 
-## Token/time discipline
+The Original view is a camera/recording baseline; selected heavy processing should
+not run merely because live acquisition is active.
 
-Before implementing:
-1. inspect existing code and related repositories;
-2. identify what is already solved;
-3. reuse it;
-4. change only the missing layer;
-5. run the smallest acceptance test that proves the change.
+## Camera safety
 
-Do not broaden the task with speculative cleanup or unrelated benchmarks without explicit user request.
+Do not modify persistent camera state unless explicitly requested.
+
+Do not write persistent User Sets, force network configuration, update firmware,
+or drive hardware outputs as part of ordinary testing. Temporary session changes
+should be restored on clean shutdown where practical.
+
+## Reporting
+
+Report:
+- what behavior changed;
+- what existing implementation was reused;
+- the minimum meaningful validation performed;
+- any remaining uncertainty that matters to the user's next decision.
+
+Do not pad reports with exhaustive file lists, SHAs, benchmark tables, or repeated
+test inventories unless they materially help the task or the user asks for them.
