@@ -49,6 +49,8 @@ This creates or updates the repository-local `.venv`, installs editable Basler s
 
 For normal use, double-click `Start Defleco LAB.cmd` or the `Defleco LAB` Desktop shortcut. For visible startup errors and camera troubleshooting, use `Start Defleco LAB - Debug.cmd`. The optional idempotent `install_local_windows.ps1` performs setup and shortcut creation together.
 
+After the first installation, `Update Defleco LAB.cmd` performs a safe fast-forward update of `main`, refreshes the editable Basler installation, and keeps the existing Desktop shortcut.
+
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\install_local_windows.ps1
 ```
@@ -76,7 +78,9 @@ Algorithms implement a common metadata-rich interface; the parameter panel is ge
 
 Live camera delivery uses a bounded mailbox and processing uses latest-wins/coalesced results so a multi-megapixel stream cannot build an unbounded Qt event backlog. The live history is intentionally bounded; very long temporal windows should be evaluated from a recorded session. Response rendering is display-only and may be downscaled independently of the numerical processing scale.
 
-For normal Basler live preview the application temporarily requests free-running continuous acquisition (`FrameStart` trigger off where supported) and restores the volatile acquisition state when the camera closes. It does not load/save persistent User Sets or change persistent network settings.
+For normal Basler live preview the application temporarily requests free-running continuous acquisition (`FrameStart` trigger off where supported) and restores the volatile acquisition state when the camera closes. It does not load/save persistent User Sets or change persistent network settings. Camera exposure/gain handling follows the proven behavior of the related Basler test tools: automatic mode and the current numeric ExposureTime/Gain are treated as separate state, and a manual value is not written while the corresponding auto loop is active.
+
+The `Original` tab is intentionally a camera/recording baseline and does not run the selected processing method continuously. Processing begins when a processed/debug view is requested.
 
 ## Tests
 
@@ -91,7 +95,7 @@ Normal CI needs no camera and remains hardware-independent.
 
 On 2026-09-26, one Basler `a2A2448-23gmBAS` (`BaslerGigE`) was smoke tested on Windows with pylon Runtime `12.2.0.1265` and pypylon `26.6`. Exact-descriptor discovery/opening, native `Mono8` acquisition, a harmless temporary `ExposureTime` readback, rollback, GUI live preview, Structure Tensor processing, local raw recording, reload, and Farneback replay passed. The final bounded raw run received 61 frames in 10.164 s (6.001 FPS), with 0 timeouts and 0 grab errors; BlockID and camera timestamp were monotonic. The local frames/session were not committed.
 
-A later interactive-use report exposed two issues that the bounded smoke test did not stress adequately: a camera could arrive in a volatile trigger/acquisition state left by another tool, and full-resolution live processing/visualization could overload the GUI. The current live runtime addresses both by temporary free-run preparation/restoration and bounded/coalesced frame/result delivery. These follow-up changes still require a fresh physical-camera interactive stability retest before they should be considered hardware-validated.
+A later interactive stability retest on the same model verified the bounded/coalesced live runtime after the reported GUI-freeze issue was fixed. At approximately 6 source FPS, Gradient remained responsive at 50% and 100% scale; Structure Tensor at 100% and Gabor at 50% exceeded real-time processing capacity and correctly used latest-wins processing drops rather than accumulating GUI latency. Five Freeze -> Live cycles, short recording/replay, clean shutdown, and subsequent opening in pylon Viewer passed. Heavy methods should therefore be treated as scale-dependent experiments rather than assumed full-resolution real-time filters.
 
 The test does not establish calibrated deflectometry, optical quality, maximum sustained link throughput, external trigger/PTP behavior, GPIO behavior, firmware behavior, or suitability for production inspection. Persistent User Sets and network settings were not tested or changed.
 
