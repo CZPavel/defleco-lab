@@ -1,0 +1,1 @@
+{"name":"Moving Object - Local Correlation","method":"local_phase_correlation","parameters":{"window_size":64,"grid_stride":32,"minimum_texture":3.0,"minimum_q":0.08,"max_displacement":20.0},"frame_stride":1,"processing_scale":1.0,"motion_compensation":true,"motion_mode":"auto","axis":"x"}

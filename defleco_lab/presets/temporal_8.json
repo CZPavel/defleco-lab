@@ -1,0 +1,1 @@
+{"name":"Temporal Variation - 8 Frames","method":"temporal_statistics","parameters":{"frames":8,"output":"std"},"frame_stride":1,"processing_scale":0.5,"motion_compensation":false}

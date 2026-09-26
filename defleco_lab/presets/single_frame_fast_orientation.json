@@ -1,0 +1,1 @@
+{"name":"Single Frame - Fast Orientation","method":"structure_tensor","parameters":{"derivative":"scharr","tensor_sigma":2.0,"orientation_smoothing_sigma":8.0},"frame_stride":1,"processing_scale":0.5,"motion_compensation":false}

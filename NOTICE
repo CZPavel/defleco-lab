@@ -1,0 +1,10 @@
+Defleco LAB
+Copyright (c) 2026 Pavel Joura
+
+The multi-ROI phase-correlation design and related synthetic-test concepts were
+refactored from CZPavel/basler-camera-encoder, Copyright (c) 2026 Pavel Joura,
+used under the MIT License:
+https://github.com/CZPavel/basler-camera-encoder
+
+Third-party Python packages are not bundled in this source repository. NumPy,
+OpenCV, PySide6, and optional pypylon remain under their respective licenses.

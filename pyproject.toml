@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "defleco-lab"
+version = "0.1.0"
+description = "Experimental desktop laboratory for dynamic-pattern and motion-compensated deflectometry image processing"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{name = "Pavel Joura"}]
+dependencies = [
+  "numpy>=2.0,<3",
+  "opencv-python>=4.10,<5",
+  "PySide6>=6.8,<7",
+]
+
+[project.optional-dependencies]
+basler = ["pypylon==26.6"]
+dev = ["pytest>=8.0", "ruff>=0.9"]
+
+[project.scripts]
+defleco-lab = "defleco_lab.app:main"
+
+[tool.setuptools.packages.find]
+include = ["defleco_lab*"]
+
+[tool.setuptools.package-data]
+defleco_lab = ["presets/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint.per-file-ignores]
+"defleco_lab/camera/basler_source.py" = ["BLE001"]
+"defleco_lab/gui/main_window.py" = ["BLE001"]
+"defleco_lab/motion/__init__.py" = ["F401"]
+"defleco_lab/processing/__init__.py" = ["F401"]
+"defleco_lab/runtime/processing_worker.py" = ["BLE001"]
+"defleco_lab/runtime/acquisition_worker.py" = ["BLE001"]
+"defleco_lab/sessions/async_recorder.py" = ["BLE001"]

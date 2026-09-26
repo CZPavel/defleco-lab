@@ -1,0 +1,1 @@
+{"name":"Moving Object - Compensated Farneback","method":"farneback","parameters":{"stride":1,"processing_scale":0.5},"frame_stride":1,"processing_scale":0.5,"motion_compensation":true,"motion_mode":"auto","axis":"x"}
