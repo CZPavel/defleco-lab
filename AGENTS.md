@@ -86,6 +86,20 @@ Do not compute hidden heavy views or intermediate maps unless they are needed.
 
 The Original view is a camera/recording baseline. Do not run the selected processing method continuously while only the Original tab is active.
 
+## Definition of done
+
+A task is not complete just because the GUI starts, CI is green, or a camera can be opened.
+
+For processing work, acceptance must exercise the actual processing path:
+- produce a non-empty numerical response from the changed method;
+- verify a known synthetic disturbance changes the response in the expected region where practical;
+- verify the Processed view can display the selected primary output;
+- use recorded real frames/replay for algorithm comparisons once such data exist.
+
+For camera work, reuse the proven camera layer first and test only the changed camera behavior. Do not spend the task budget re-validating unrelated camera functions.
+
+Prefer end-to-end evidence for the project's primary purpose over broad peripheral testing.
+
 ## Testing scope
 
 Default hardware validation should be short and targeted.
