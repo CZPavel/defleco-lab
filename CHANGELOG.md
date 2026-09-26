@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Fixed several PoC-processing correctness issues: invalid preset keys are now rejected instead of silently ignored, and all shipped presets are schema-valid.
+- Structure Tensor and Gabor now expose defect-oriented primary outputs (including orientation residual) directly in the Processed view.
+- Gradient keeps raw numerical response by default; display normalization remains a visualization concern, preserving cross-pattern comparability.
+- Gabor internal downscale now scales its spatial kernel consistently; Local Phase Correlation exposes magnitude/dx/dy/quality outputs.
+- Mono8 overlay rendering now preserves native camera brightness instead of per-frame min/max stretching.
 - Added repository-level AGENTS.md guardrails: reuse proven Basler camera code first, keep hardware tests short, and prioritize the processing experiment.
 - Aligned ExposureAuto/ExposureTime and GainAuto/Gain handling with the existing Basler test applications; automatic-loop runtime values are no longer restored/written as if they were manual settings.
 - Made Original view a true camera/recording baseline with no continuous selected-method processing load.
