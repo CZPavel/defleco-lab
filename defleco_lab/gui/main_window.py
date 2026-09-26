@@ -24,18 +24,24 @@ from .visualization import VisualizationPanel, VisualizationSettings, Visualizat
 
 
 class MainWindow(QtWidgets.QMainWindow):
+    LIVE_HISTORY_CAPACITY = 64
+    DISPLAY_MAX_PIXELS = 1_500_000
+
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Defleco LAB - Experimental Research Software")
         self.resize(1500, 900)
         self.source = SyntheticSource()
-        self.history = deque(maxlen=512)
+        # Keep live memory bounded. At 2448x2048 Mono8, 512 frames exceed 2.5 GB.
+        self.history = deque(maxlen=self.LIVE_HISTORY_CAPACITY)
         self.replay = []
         self.replay_index = 0
         self.recorder: AsyncSessionRecorder | None = None
         self.camera_worker: BaslerAcquisitionWorker | None = None
         self.last_result = None
         self.last_original: np.ndarray | None = None
+        self.last_motion_mask: np.ndarray | None = None
+        self._last_display_scale = 1.0
         self.compare_reference: np.ndarray | None = None
         self.compare_reference_mask: np.ndarray | None = None
         self.visualization_transform = VisualizationTransform()
@@ -49,8 +55,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.timer = QtCore.QTimer(self)
         self.timer.setInterval(60)
         self.timer.timeout.connect(self._next_frame)
+        self.camera_timer = QtCore.QTimer(self)
+        self.camera_timer.setInterval(33)
+        self.camera_timer.timeout.connect(self._poll_camera_frames)
+        self.visualization_timer = QtCore.QTimer(self)
+        self.visualization_timer.setSingleShot(True)
+        self.visualization_timer.setInterval(60)
+        self.visualization_timer.timeout.connect(self._render_visualization)
         self.processor = ProcessingWorker(self)
-        self.processor.completed.connect(self._processing_complete)
+        self.processor.resultAvailable.connect(self._consume_processing_result)
         self.processor.failed.connect(
             lambda message: self.statusBar().showMessage(f"Processing: {message}")
         )
@@ -91,6 +104,7 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self.tabs.addTab(compare, "Compare")
         self.tabs.addTab(self.motion_debug, "Motion Debug")
+        self.tabs.currentChanged.connect(self._active_view_changed)
         self.original.pixelHovered.connect(
             lambda x, y, v: self.statusBar().showMessage(f"Pixel x={x}, y={y}, value={v}")
         )
@@ -352,7 +366,6 @@ class MainWindow(QtWidgets.QMainWindow):
                         else float(text)
                     )
             self.camera_worker = BaslerAcquisitionWorker(descriptor, temporary, self)
-            self.camera_worker.frameReady.connect(self._receive_packet)
             self.camera_worker.failed.connect(self._camera_failed)
             self.camera_worker.metricsReady.connect(self._camera_metrics)
             self.camera_worker.restoreReport.connect(self._camera_restored)
@@ -360,6 +373,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 lambda report: self.statusBar().showMessage(f"Temporary camera readback: {report}")
             )
             self.camera_worker.start()
+            self.camera_timer.start()
             self.state_label.setText("LIVE")
             return
         if selected_source == "Recorded Session":
@@ -385,13 +399,27 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _stop(self):
         self.timer.stop()
+        self.camera_timer.stop()
         if self.camera_worker is not None:
-            self.camera_worker.stop()
-            self.camera_worker = None
+            worker = self.camera_worker
+            if worker.stop():
+                self.camera_worker = None
+            else:
+                self.state_label.setText("ERROR")
+                self.statusBar().showMessage(
+                    "Camera worker did not stop within 5 s; camera state restoration is not confirmed"
+                )
+                return False
         self.state_label.setText("FROZEN")
+        return True
 
     def closeEvent(self, event):
-        self._stop()
+        if not self._stop():
+            self.statusBar().showMessage(
+                "Camera worker did not stop cleanly; close postponed to protect camera state"
+            )
+            event.ignore()
+            return
         try:
             self._record_stop()
         except (OSError, TimeoutError) as exc:
@@ -401,6 +429,25 @@ class MainWindow(QtWidgets.QMainWindow):
             event.ignore()
             return
         event.accept()
+
+    def _poll_camera_frames(self) -> None:
+        """Drain the bounded camera mailbox and process only the newest display frame."""
+        worker = self.camera_worker
+        if worker is None:
+            self.camera_timer.stop()
+            return
+        packets = worker.drain_frames()
+        if not packets:
+            return
+        for packet in packets:
+            self.history.append(packet)
+            if self.recorder:
+                self.recorder.append(packet)
+        latest = packets[-1]
+        self.last_original = latest.image
+        if self.tabs.currentIndex() == 0:
+            self.original.set_array(latest.image)
+        self._process()
 
     def _next_frame(self) -> None:
         displayed_index = self.replay_index
@@ -426,8 +473,8 @@ class MainWindow(QtWidgets.QMainWindow):
             )
         self.history.append(packet)
         self.last_original = packet.image
-        self.original.set_array(packet.image)
-        self.compare_left.set_array(packet.image)
+        if self.tabs.currentIndex() == 0:
+            self.original.set_array(packet.image)
         if self.recorder:
             self.recorder.append(packet)
         self._process()
@@ -463,6 +510,8 @@ class MainWindow(QtWidgets.QMainWindow):
     @QtCore.Slot(object)
     def _camera_metrics(self, metrics: dict[str, float | int]) -> None:
         self.camera_metrics = dict(metrics)
+        if self.source_combo.currentText() == "Basler":
+            self.received_fps = float(metrics.get("received_fps", 0.0))
 
     def _process(self) -> None:
         mid = self.method_combo.currentData() if hasattr(self, "method_combo") else None
@@ -473,6 +522,14 @@ class MainWindow(QtWidgets.QMainWindow):
         parameters["stride"] = stride
         method = registry.create(mid, **parameters)
         needed = method.history_requirement()
+        if not self.replay and needed > self.LIVE_HISTORY_CAPACITY:
+            self.last_result = None
+            self._clear_processed_views()
+            self.statusBar().showMessage(
+                f"Method needs {needed} frames, but live history is bounded to "
+                f"{self.LIVE_HISTORY_CAPACITY}; reduce window/stride or use replay"
+            )
+            return
         if len(self.history) < needed:
             self.last_result = None
             self._clear_processed_views()
@@ -514,7 +571,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 deadband=self.motion_deadband.value(),
                 max_shift=self.max_shift.value(),
                 frame_id=self.history[-1].frame_id,
-                motion_frames=list(self.history),
+                motion_frames=list(self.history) if self.comp.isChecked() else None,
+                keep_intermediates=self.tabs.currentIndex() == 2,
             )
         )
 
@@ -522,7 +580,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.processor.reset_state()
         self.statusBar().showMessage("Motion position reset to 0 px")
 
-    @QtCore.Slot(object, float, float, int, object, int)
+    @QtCore.Slot()
+    def _consume_processing_result(self) -> None:
+        payload = self.processor.take_latest_result()
+        if payload is not None:
+            self._processing_complete(*payload)
+
     def _processing_complete(
         self, result, elapsed: float, scale: float, stride: int, motion, frame_id: int
     ) -> None:
@@ -547,9 +610,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 float(motion["quality"]),
                 float(motion["cumulative"]),
             )
-        self._render_visualization()
-        if motion.get("mask") is not None:
-            self.motion_debug.set_array(motion["mask"].astype(np.uint8) * 255)
+        self.last_motion_mask = motion.get("mask")
+        self._schedule_visualization()
         roi_summary = ""
         if motion.get("roi_results"):
             roi_summary = " | " + "; ".join(
@@ -567,41 +629,109 @@ class MainWindow(QtWidgets.QMainWindow):
             f" | Scale {scale:.2f} | Stride {stride} | Shift {motion['shift']:.2f} px"
             f" | Position {motion['cumulative']:.2f} px | Q {motion['quality']:.3f}"
             f" | valid Motion ROI {motion['valid']} | Processing drops {self.processing_drops}"
+            f" | Result drops {self.processor.result_dropped}"
+            f" | Cam-buffer drops {int(self.camera_metrics.get('buffer_drops', 0))}"
+            f" | Display x{self._last_display_scale:.2f}"
             f"{recorder_state}{roi_summary}"
         )
 
     @QtCore.Slot(object)
     def _visualization_changed(self, settings: VisualizationSettings) -> None:
         self.visualization_settings = settings
-        self._render_visualization()
+        self._schedule_visualization()
+
+    @QtCore.Slot(int)
+    def _active_view_changed(self, index: int) -> None:
+        if index == 0 and self.last_original is not None:
+            self.original.set_array(self.last_original)
+            return
+        if index == 2 and self.last_result is not None and not self.last_result.intermediates:
+            self._process()
+            return
+        self._schedule_visualization()
+
+    def _schedule_visualization(self) -> None:
+        if self.tabs.currentIndex() == 0:
+            return
+        self.visualization_timer.start()
+
+    def _display_inputs(
+        self,
+        response: np.ndarray,
+        valid_mask: np.ndarray | None,
+    ) -> tuple[np.ndarray, np.ndarray | None]:
+        source = np.asarray(response)
+        height, width = source.shape[:2]
+        pixels = height * width
+        if pixels <= self.DISPLAY_MAX_PIXELS:
+            self._last_display_scale = 1.0
+            return source, valid_mask
+        scale = float(np.sqrt(self.DISPLAY_MAX_PIXELS / pixels))
+        target = (max(1, round(width * scale)), max(1, round(height * scale)))
+        preview = cv2.resize(source, target, interpolation=cv2.INTER_AREA)
+        mask = None
+        if valid_mask is not None:
+            mask = cv2.resize(
+                np.asarray(valid_mask, dtype=np.uint8),
+                target,
+                interpolation=cv2.INTER_NEAREST,
+            ).astype(bool)
+        self._last_display_scale = scale
+        return preview, mask
+
+    def _render_response(
+        self,
+        response: np.ndarray,
+        valid_mask: np.ndarray | None,
+    ):
+        preview, preview_mask = self._display_inputs(response, valid_mask)
+        return self.visualization_transform.render(
+            preview,
+            self.visualization_settings,
+            self.last_original,
+            preview_mask,
+        )
 
     def _render_visualization(self) -> None:
         if self.last_result is None:
             return
-        primary = self.visualization_transform.render(
-            self.last_result.primary,
-            self.visualization_settings,
-            self.last_original,
-            self.last_result.valid_mask,
-        )
-        self.processed.set_array(primary.image)
-        self.compare_right.set_array(primary.image)
-        if self.last_result.intermediates:
-            intermediate = self.visualization_transform.render(
+        index = self.tabs.currentIndex()
+        if index == 0:
+            return
+        if index == 1:
+            primary = self._render_response(
+                self.last_result.primary, self.last_result.valid_mask
+            )
+            self.processed.set_array(primary.image)
+            return
+        if index == 2:
+            if not self.last_result.intermediates:
+                return
+            intermediate = self._render_response(
                 next(iter(self.last_result.intermediates.values())),
-                self.visualization_settings,
-                self.last_original,
                 self.last_result.valid_mask,
             )
             self.intermediate.set_array(intermediate.image)
-        if self.compare_reference is not None:
-            reference = self.visualization_transform.render(
-                self.compare_reference,
-                self.visualization_settings,
-                self.last_original,
-                self.compare_reference_mask,
+            return
+        if index == 3:
+            primary = self._render_response(
+                self.last_result.primary, self.last_result.valid_mask
             )
-            self.compare_left.set_array(reference.image)
+            self.compare_right.set_array(primary.image)
+            if self.compare_reference is not None:
+                reference = self._render_response(
+                    self.compare_reference, self.compare_reference_mask
+                )
+                self.compare_left.set_array(reference.image)
+            elif self.last_original is not None:
+                preview, _ = self._display_inputs(self.last_original, None)
+                self.compare_left.set_array(preview)
+            return
+        if index == 4 and self.last_motion_mask is not None:
+            preview, _ = self._display_inputs(
+                self.last_motion_mask.astype(np.uint8) * 255, None
+            )
+            self.motion_debug.set_array(preview)
 
     def _set_compare_reference(self) -> None:
         if self.last_result is None:

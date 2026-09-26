@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Reworked live camera delivery to use a bounded mailbox instead of queueing full-resolution frame payloads into the Qt event loop.
+- Coalesced heavy processing results so only the newest result can wait for the GUI; added result/camera-buffer drop diagnostics.
+- Bounded live frame history to prevent multi-gigabyte growth on multi-megapixel streams.
+- Made response visualization active-tab-only, debounced, and display-downscaled while keeping numerical processing at the selected processing scale.
+- Reduced live memory/CPU cost for Structure Tensor, Gabor, temporal statistics, Farneback, DIS, and temporal fusion when intermediate maps are not requested.
+- Fixed overlap handling in the DIC-like local phase-correlation map by averaging contributions instead of scan-order overwrite.
+- Added temporary Basler free-run preparation (Continuous/FrameStart/Trigger Off where supported) with restore-on-close to recover from volatile trigger states left by other tools.
+- Added camera-thread shutdown protection and reserved CPU headroom for the Qt event loop.
 - Added idempotent Windows local setup, normal/debug launchers, and Desktop shortcut creation.
 - Added a centralized Fusion dark theme using installed Qt system fonts.
 - Added typed method editors and display-only range, heatmap, overlay, and shared compare controls.

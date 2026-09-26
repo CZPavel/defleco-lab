@@ -34,13 +34,17 @@ class ProcessingRequest:
     max_shift: float = 50.0
     frame_id: int = -1
     motion_frames: list[Any] | None = None
+    keep_intermediates: bool = False
     generation: int = 0
 
 
 class ProcessingWorker(QtCore.QThread):
     """Latest-wins processor: stale display work is dropped, never queued indefinitely."""
 
-    completed = QtCore.Signal(object, float, float, int, object, int)
+    # Result payloads can be very large at multi-megapixel resolutions. Do not
+    # queue them directly through Qt; signal only that a newest result is ready.
+    resultAvailable = QtCore.Signal()
+    completed = QtCore.Signal(object, float, float, int, object, int)  # legacy API
     failed = QtCore.Signal(str)
 
     def __init__(self, parent=None) -> None:
@@ -53,6 +57,9 @@ class ProcessingWorker(QtCore.QThread):
         self._last_motion_frame_id = -1
         self._last_motion_image: np.ndarray | None = None
         self._generation = 0
+        self._latest_result: tuple | None = None
+        self._result_notification_pending = False
+        self.result_dropped = 0
 
     def submit(self, request: ProcessingRequest) -> None:
         with self._condition:
@@ -70,6 +77,8 @@ class ProcessingWorker(QtCore.QThread):
             self._cumulative_position = 0.0
             self._last_motion_frame_id = -1
             self._last_motion_image = None
+            self._latest_result = None
+            self._result_notification_pending = False
 
     @staticmethod
     def _calculate_cumulative_motion(
@@ -137,6 +146,28 @@ class ProcessingWorker(QtCore.QThread):
             self._last_motion_image,
         )
         self._cumulative_position, self._last_motion_frame_id, self._last_motion_image = state
+
+
+    def take_latest_result(self) -> tuple | None:
+        """Take the newest completed result and release the notification gate."""
+        with self._condition:
+            payload = self._latest_result
+            self._latest_result = None
+            self._result_notification_pending = False
+            return payload
+
+    def _publish_result(self, payload: tuple) -> None:
+        """Keep at most one heavy completed result waiting for the GUI."""
+        notify = False
+        with self._condition:
+            if self._latest_result is not None:
+                self.result_dropped += 1
+            self._latest_result = payload
+            if not self._result_notification_pending:
+                self._result_notification_pending = True
+                notify = True
+        if notify:
+            self.resultAvailable.emit()
 
     def stop(self) -> bool:
         with self._condition:
@@ -241,8 +272,12 @@ class ProcessingWorker(QtCore.QThread):
                     valid_mask = analysis_mask if valid_mask is None else valid_mask & analysis_mask
                 started = perf_counter()
                 result = registry.create(request.method_id, **request.parameters).process(
-                    frames, valid_mask=valid_mask
+                    frames,
+                    valid_mask=valid_mask,
+                    keep_intermediates=request.keep_intermediates,
                 )
+                if not request.keep_intermediates:
+                    result.intermediates.clear()
                 if valid_mask is not None:
                     result.valid_mask = valid_mask
                     if result.primary.shape[:2] == valid_mask.shape:
@@ -273,8 +308,8 @@ class ProcessingWorker(QtCore.QThread):
                         self._last_motion_frame_id,
                         self._last_motion_image,
                     ) = state
-                self.completed.emit(
-                    result, elapsed, request.scale, request.stride, motion, request.frame_id
+                self._publish_result(
+                    (result, elapsed, request.scale, request.stride, motion, request.frame_id)
                 )
             except Exception as exc:  # isolate plug-in failures from thread lifecycle
                 self.failed.emit(str(exc))

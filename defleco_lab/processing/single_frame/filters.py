@@ -30,7 +30,7 @@ class Gradient(ProcessingMethod):
         },
     )
 
-    def _process(self, frames, **_):
+    def _process(self, frames, **context):
         a = _blur(gray32(frames[-1]), self.parameters["sigma"])
         op = self.parameters["operator"]
         if op == "scharr":
@@ -42,6 +42,8 @@ class Gradient(ProcessingMethod):
             )
         mag = cv2.magnitude(gx, gy)
         primary = normalize_map(mag) if self.parameters["normalize"] else mag
+        if not context.get("keep_intermediates", True):
+            return ProcessingResult(primary)
         return ProcessingResult(primary, {"gradient_x": gx, "gradient_y": gy, "magnitude": mag})
 
 
@@ -59,13 +61,15 @@ class Laplacian(ProcessingMethod):
         },
     )
 
-    def _process(self, frames, **_):
+    def _process(self, frames, **context):
         signed = cv2.Laplacian(
             _blur(gray32(frames[-1]), self.parameters["sigma"]),
             cv2.CV_32F,
             ksize=int(self.parameters["ksize"]),
         )
         absolute = np.abs(signed)
+        if not context.get("keep_intermediates", True):
+            return ProcessingResult(absolute)
         return ProcessingResult(absolute, {"signed": signed, "absolute": absolute})
 
 
@@ -95,10 +99,13 @@ class DifferenceOfGaussians(ProcessingMethod):
         },
     )
 
-    def _process(self, frames, **_):
+    def _process(self, frames, **context):
         a = gray32(frames[-1])
         signed = _blur(a, self.parameters["sigma_small"]) - _blur(a, self.parameters["sigma_large"])
-        return ProcessingResult(np.abs(signed), {"signed": signed, "absolute": np.abs(signed)})
+        absolute = np.abs(signed)
+        if not context.get("keep_intermediates", True):
+            return ProcessingResult(absolute)
+        return ProcessingResult(absolute, {"signed": signed, "absolute": absolute})
 
 
 class LocalBackgroundResidual(ProcessingMethod):
@@ -114,11 +121,14 @@ class LocalBackgroundResidual(ProcessingMethod):
         },
     )
 
-    def _process(self, frames, **_):
+    def _process(self, frames, **context):
         a = gray32(frames[-1])
         bg = _blur(a, self.parameters["sigma"])
         signed = a - bg
-        return ProcessingResult(np.abs(signed), {"background": bg, "signed": signed})
+        primary = np.abs(signed)
+        if not context.get("keep_intermediates", True):
+            return ProcessingResult(primary)
+        return ProcessingResult(primary, {"background": bg, "signed": signed})
 
 
 class StructureTensor(ProcessingMethod):
@@ -155,7 +165,7 @@ class StructureTensor(ProcessingMethod):
         },
     )
 
-    def _process(self, frames, **_):
+    def _process(self, frames, **context):
         a = _blur(gray32(frames[-1]), self.parameters["derivative_sigma"])
         if self.parameters["operator"] == "scharr":
             gx, gy = cv2.Scharr(a, cv2.CV_32F, 1, 0), cv2.Scharr(a, cv2.CV_32F, 0, 1)
@@ -167,10 +177,13 @@ class StructureTensor(ProcessingMethod):
         s = float(self.parameters["tensor_sigma"])
         jxx, jyy, jxy = _blur(gx * gx, s), _blur(gy * gy, s), _blur(gx * gy, s)
         root = np.sqrt((jxx - jyy) ** 2 + 4 * jxy * jxy)
+        coherence = (root / (jxx + jyy + 1e-6)).astype(np.float32)
+        if not context.get("keep_intermediates", True):
+            return ProcessingResult(coherence)
+
         l1 = (jxx + jyy + root) / 2
         l2 = (jxx + jyy - root) / 2
         theta = (0.5 * np.arctan2(2 * jxy, jxx - jyy)).astype(np.float32)
-        coherence = (root / (jxx + jyy + 1e-6)).astype(np.float32)
         os = float(self.parameters["orientation_smooth_sigma"])
         c = _blur(np.cos(2 * theta) * coherence, os)
         ss = _blur(np.sin(2 * theta) * coherence, os)
@@ -214,7 +227,7 @@ class GaborBank(ProcessingMethod):
         },
     )
 
-    def _process(self, frames, **_):
+    def _process(self, frames, **context):
         src = gray32(frames[-1])
         scale = float(self.parameters["scale"])
         a = (
@@ -223,12 +236,15 @@ class GaborBank(ProcessingMethod):
             else src
         )
         periods = self.parameters["periods"]
-        periods = [periods] if np.isscalar(periods) else periods
+        periods = [periods] if np.isscalar(periods) else list(periods)
         n = int(self.parameters["orientations"])
-        responses = []
-        angles = []
-        period_ids = []
-        for p in periods:
+        keep_intermediates = context.get("keep_intermediates", True)
+
+        maximum = np.full(a.shape, -np.inf, np.float32)
+        orientation = np.zeros(a.shape, np.float32) if keep_intermediates else None
+        selected = np.full(a.shape, -np.inf, np.float32) if keep_intermediates else None
+
+        for period_index, p in enumerate(periods):
             for theta in np.linspace(0, np.pi, n, endpoint=False):
                 k = max(7, round(float(self.parameters["sigma"]) * 6) | 1)
                 common = (
@@ -248,19 +264,26 @@ class GaborBank(ProcessingMethod):
                 ki /= np.linalg.norm(ki) + 1e-9
                 real = cv2.filter2D(a, cv2.CV_32F, kr)
                 imag = cv2.filter2D(a, cv2.CV_32F, ki)
-                responses.append(cv2.magnitude(real, imag))
-                angles.append(theta)
-                period_ids.append(float(p))
-        stack = np.stack(responses)
-        idx = np.argmax(stack, axis=0)
-        maximum = np.max(stack, axis=0)
-        orientation = np.take(np.asarray(angles, np.float32), idx)
+                response = cv2.magnitude(real, imag)
+
+                stronger = response > maximum
+                maximum[stronger] = response[stronger]
+                if orientation is not None:
+                    orientation[stronger] = float(theta)
+                if selected is not None and period_index == 0:
+                    np.maximum(selected, response, out=selected)
+
         if scale != 1:
             maximum = cv2.resize(maximum, (src.shape[1], src.shape[0]))
+        if not keep_intermediates:
+            return ProcessingResult(maximum)
+
+        assert orientation is not None and selected is not None
+        if scale != 1:
             orientation = cv2.resize(
                 orientation, (src.shape[1], src.shape[0]), interpolation=cv2.INTER_NEAREST
             )
-        selected = np.max(stack[np.asarray(period_ids) == float(periods[0])], axis=0)
+            selected = cv2.resize(selected, (src.shape[1], src.shape[0]))
         smooth = 0.5 * np.arctan2(
             cv2.GaussianBlur(np.sin(2 * orientation), (0, 0), 8),
             cv2.GaussianBlur(np.cos(2 * orientation), (0, 0), 8),
@@ -268,9 +291,6 @@ class GaborBank(ProcessingMethod):
         residual = 0.5 * np.arctan2(
             np.sin(2 * (orientation - smooth)), np.cos(2 * (orientation - smooth))
         )
-        if scale != 1:
-            selected = cv2.resize(selected, (src.shape[1], src.shape[0]))
-            residual = cv2.resize(residual, (src.shape[1], src.shape[0]))
         return ProcessingResult(
             maximum,
             {
