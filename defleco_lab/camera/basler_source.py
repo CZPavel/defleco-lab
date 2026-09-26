@@ -208,9 +208,9 @@ class BaslerSource:
                     if not bool(enabled.Value):
                         enabled.Value = True
                         report["AcquisitionFrameRateEnable"] = True
-                except Exception:
+                except Exception as exc:
                     # Some cameras expose the node but manage it implicitly.
-                    pass
+                    report["AcquisitionFrameRateEnable"] = f"unchanged ({exc})"
 
         # Proven ROI ordering: offsets low first, size, then requested offsets.
         roi_changes = any(name in changes for name in self._ROI_ORDER)
