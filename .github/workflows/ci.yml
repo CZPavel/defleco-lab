@@ -13,5 +13,10 @@ jobs:
       - run: python -m pip install -e ".[dev]"
       - run: python -m ruff check .
       - run: python -m compileall -q defleco_lab tests tools
+      - name: Parse Windows setup scripts
+        shell: powershell
+        run: |
+          @('setup_windows.ps1', 'install_local_windows.ps1', 'tools/create_windows_shortcut.ps1') |
+            ForEach-Object { [void][scriptblock]::Create((Get-Content -LiteralPath $_ -Raw)) }
       - run: python -m pytest
       - run: python tools/synthetic_acceptance.py

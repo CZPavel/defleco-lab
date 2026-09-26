@@ -36,6 +36,23 @@ For optional Basler support:
 
 The application never selects real hardware by connection order. Discovery is read-only and the operator must select an exact discovered camera. Supported temporary acquisition settings are capability-checked and restored on disconnect where practical. Persistent User Sets, Force IP, firmware, network persistence, and GPIO output are intentionally outside scope.
 
+### Easy local launch
+
+For the first setup on Windows, open PowerShell in the repository and run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\setup_windows.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\create_windows_shortcut.ps1
+```
+
+This creates or updates the repository-local `.venv`, installs editable Basler support, performs a synthetic smoke test, and creates the user-local `Defleco LAB` Desktop shortcut. The pylon Runtime is not redistributed and must be installed separately when required.
+
+For normal use, double-click `Start Defleco LAB.cmd` or the `Defleco LAB` Desktop shortcut. For visible startup errors and camera troubleshooting, use `Start Defleco LAB - Debug.cmd`. The optional idempotent `install_local_windows.ps1` performs setup and shortcut creation together.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install_local_windows.ps1
+```
+
 ## Quick synthetic experiment
 
 1. Start with `Synthetic` and `fringes`.

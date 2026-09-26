@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added idempotent Windows local setup, normal/debug launchers, and Desktop shortcut creation.
 - Added a centralized Fusion dark theme using installed Qt system fonts.
 - Added typed method editors and display-only range, heatmap, overlay, and shared compare controls.
 - Fixed replay history reconstruction for strided and temporal multi-frame methods.
