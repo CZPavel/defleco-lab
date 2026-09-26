@@ -310,10 +310,14 @@ class LocalPhaseCorrelation(ProcessingMethod):
                 "step": 1.0,
                 "units": "px",
             },
+            "output": {
+                "default": "magnitude",
+                "choices": ["magnitude", "dx", "dy", "quality"],
+            },
         },
     )
 
-    def _process(self, frames, **_):
+    def _process(self, frames, **context):
         old, cur = _pair(frames, int(self.parameters["stride"]))
         w = int(self.parameters["window_size"])
         gs = int(self.parameters["grid_stride"])
@@ -355,9 +359,13 @@ class LocalPhaseCorrelation(ProcessingMethod):
         dy[valid_pixels] = sum_dy[valid_pixels] / count[valid_pixels]
         q[valid_pixels] = sum_q[valid_pixels] / count[valid_pixels]
         mag = np.hypot(dx, dy)
+        maps = {"dx": dx, "dy": dy, "magnitude": mag, "quality": q}
+        output = self.parameters["output"]
+        primary = np.nan_to_num(maps[output])
+        intermediates = maps if context.get("keep_intermediates", True) else {}
         return ProcessingResult(
-            np.nan_to_num(mag),
-            {"dx": dx, "dy": dy, "magnitude": mag, "quality": q},
+            primary,
+            intermediates,
             overlays=overlays,
             valid_mask=np.isfinite(mag),
         )
