@@ -72,6 +72,12 @@ source -> immutable FramePacket -> bounded frame history -> processing method ->
 
 Algorithms implement a common metadata-rich interface; the parameter panel is generated from each method schema. Camera-specific objects do not enter processing code. See [architecture](docs/architecture.md), [methods](docs/methods.md), [motion compensation](docs/motion-compensation.md), and [session format](docs/session-format.md).
 
+### Live runtime behavior
+
+Live camera delivery uses a bounded mailbox and processing uses latest-wins/coalesced results so a multi-megapixel stream cannot build an unbounded Qt event backlog. The live history is intentionally bounded; very long temporal windows should be evaluated from a recorded session. Response rendering is display-only and may be downscaled independently of the numerical processing scale.
+
+For normal Basler live preview the application temporarily requests free-running continuous acquisition (`FrameStart` trigger off where supported) and restores the volatile acquisition state when the camera closes. It does not load/save persistent User Sets or change persistent network settings.
+
 ## Tests
 
 ```powershell
@@ -84,6 +90,8 @@ Normal CI needs no camera and remains hardware-independent.
 ### Bounded hardware smoke test
 
 On 2026-09-26, one Basler `a2A2448-23gmBAS` (`BaslerGigE`) was smoke tested on Windows with pylon Runtime `12.2.0.1265` and pypylon `26.6`. Exact-descriptor discovery/opening, native `Mono8` acquisition, a harmless temporary `ExposureTime` readback, rollback, GUI live preview, Structure Tensor processing, local raw recording, reload, and Farneback replay passed. The final bounded raw run received 61 frames in 10.164 s (6.001 FPS), with 0 timeouts and 0 grab errors; BlockID and camera timestamp were monotonic. The local frames/session were not committed.
+
+A later interactive-use report exposed two issues that the bounded smoke test did not stress adequately: a camera could arrive in a volatile trigger/acquisition state left by another tool, and full-resolution live processing/visualization could overload the GUI. The current live runtime addresses both by temporary free-run preparation/restoration and bounded/coalesced frame/result delivery. These follow-up changes still require a fresh physical-camera interactive stability retest before they should be considered hardware-validated.
 
 The test does not establish calibrated deflectometry, optical quality, maximum sustained link throughput, external trigger/PTP behavior, GPIO behavior, firmware behavior, or suitability for production inspection. Persistent User Sets and network settings were not tested or changed.
 
