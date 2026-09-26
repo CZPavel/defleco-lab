@@ -30,7 +30,7 @@ class Gradient(ProcessingMethod):
         },
     )
 
-    def _process(self, frames, **_):
+    def _process(self, frames, **context):
         a = _blur(gray32(frames[-1]), self.parameters["sigma"])
         op = self.parameters["operator"]
         if op == "scharr":
@@ -42,6 +42,8 @@ class Gradient(ProcessingMethod):
             )
         mag = cv2.magnitude(gx, gy)
         primary = normalize_map(mag) if self.parameters["normalize"] else mag
+        if not context.get("keep_intermediates", True):
+            return ProcessingResult(primary)
         return ProcessingResult(primary, {"gradient_x": gx, "gradient_y": gy, "magnitude": mag})
 
 
@@ -59,13 +61,15 @@ class Laplacian(ProcessingMethod):
         },
     )
 
-    def _process(self, frames, **_):
+    def _process(self, frames, **context):
         signed = cv2.Laplacian(
             _blur(gray32(frames[-1]), self.parameters["sigma"]),
             cv2.CV_32F,
             ksize=int(self.parameters["ksize"]),
         )
         absolute = np.abs(signed)
+        if not context.get("keep_intermediates", True):
+            return ProcessingResult(absolute)
         return ProcessingResult(absolute, {"signed": signed, "absolute": absolute})
 
 
@@ -95,10 +99,13 @@ class DifferenceOfGaussians(ProcessingMethod):
         },
     )
 
-    def _process(self, frames, **_):
+    def _process(self, frames, **context):
         a = gray32(frames[-1])
         signed = _blur(a, self.parameters["sigma_small"]) - _blur(a, self.parameters["sigma_large"])
-        return ProcessingResult(np.abs(signed), {"signed": signed, "absolute": np.abs(signed)})
+        absolute = np.abs(signed)
+        if not context.get("keep_intermediates", True):
+            return ProcessingResult(absolute)
+        return ProcessingResult(absolute, {"signed": signed, "absolute": absolute})
 
 
 class LocalBackgroundResidual(ProcessingMethod):
@@ -114,11 +121,14 @@ class LocalBackgroundResidual(ProcessingMethod):
         },
     )
 
-    def _process(self, frames, **_):
+    def _process(self, frames, **context):
         a = gray32(frames[-1])
         bg = _blur(a, self.parameters["sigma"])
         signed = a - bg
-        return ProcessingResult(np.abs(signed), {"background": bg, "signed": signed})
+        primary = np.abs(signed)
+        if not context.get("keep_intermediates", True):
+            return ProcessingResult(primary)
+        return ProcessingResult(primary, {"background": bg, "signed": signed})
 
 
 class StructureTensor(ProcessingMethod):
