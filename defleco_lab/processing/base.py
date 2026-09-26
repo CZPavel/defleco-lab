@@ -39,6 +39,10 @@ class ProcessingMethod(ABC):
     info: MethodInfo
 
     def __init__(self, **parameters: Any):
+        unknown = set(parameters) - set(self.info.parameters)
+        if unknown:
+            names = ", ".join(sorted(unknown))
+            raise ValueError(f"{self.info.id}: unknown parameter(s): {names}")
         defaults = {
             k: (v.get("default") if isinstance(v, dict) else v)
             for k, v in self.info.parameters.items()
