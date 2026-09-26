@@ -16,7 +16,7 @@ jobs:
       - name: Parse Windows setup scripts
         shell: powershell
         run: |
-          @('setup_windows.ps1', 'install_local_windows.ps1', 'tools/create_windows_shortcut.ps1') |
+          @('setup_windows.ps1', 'install_local_windows.ps1', 'tools/create_windows_shortcut.ps1', 'tools/update_local_windows.ps1') |
             ForEach-Object { [void][scriptblock]::Create((Get-Content -LiteralPath $_ -Raw)) }
       - run: python -m pytest
       - run: python tools/synthetic_acceptance.py
