@@ -206,6 +206,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.stride.setRange(1, 16)
         self.scale = QtWidgets.QComboBox()
         self.scale.addItems(["100%", "50%", "25%"])
+        self.scale.setToolTip(
+            "Downscales frames before processing. Method parameters expressed in px "
+            "refer to the processed image grid, so keep scale fixed when comparing "
+            "parameter values across pattern experiments."
+        )
         self.comp = QtWidgets.QCheckBox("Enable one-axis compensation")
         self.analysis_only = QtWidgets.QCheckBox("Process enabled Analysis ROIs only")
         self.motion_axis = QtWidgets.QComboBox()
