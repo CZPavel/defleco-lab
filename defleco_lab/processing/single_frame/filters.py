@@ -303,12 +303,13 @@ class GaborBank(ProcessingMethod):
         orientation = np.zeros(a.shape, np.float32) if need_orientation else None
         selected = np.full(a.shape, -np.inf, np.float32) if need_selected else None
 
+        sigma = max(0.1, float(self.parameters["sigma"]) * scale)
         for period_index, p in enumerate(periods):
             for theta in np.linspace(0, np.pi, n, endpoint=False):
-                k = max(7, round(float(self.parameters["sigma"]) * 6) | 1)
+                k = max(7, round(sigma * 6) | 1)
                 common = (
                     (k, k),
-                    float(self.parameters["sigma"]),
+                    sigma,
                     float(theta),
                     float(p) * scale,
                     float(self.parameters["gamma"]),
