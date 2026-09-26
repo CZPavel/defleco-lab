@@ -71,7 +71,9 @@ class ImageViewer(QtWidgets.QGraphicsView):
             self._set_qimage(qimage, image)
 
     def _set_qimage(self, qimage: QtGui.QImage, source: np.ndarray) -> None:
-        self._image = np.asarray(source).copy()
+        # Keep a reference for pixel inspection; QImage/QPixmap already own the display copy.
+        # Avoid another multi-megapixel memcpy on every live frame.
+        self._image = np.asarray(source)
         self._pixmap.setPixmap(QtGui.QPixmap.fromImage(qimage))
         self.scene().setSceneRect(self._pixmap.boundingRect())
         if self._fit:
