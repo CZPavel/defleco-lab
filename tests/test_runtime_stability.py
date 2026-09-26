@@ -69,7 +69,7 @@ def test_free_run_state_is_temporary_and_restored(monkeypatch) -> None:
 
 
 def test_single_frame_live_path_can_skip_large_intermediate_maps() -> None:
-    y, x = np.mgrid[:96, :128]
+    _y, x = np.mgrid[:96, :128]
     image = (127 + 60 * np.sin(2 * np.pi * x / 12)).astype(np.float32)
 
     tensor = StructureTensor().process([image], keep_intermediates=False)
