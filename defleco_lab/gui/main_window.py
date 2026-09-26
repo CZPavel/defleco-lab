@@ -447,7 +447,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.last_original = latest.image
         if self.tabs.currentIndex() == 0:
             self.original.set_array(latest.image)
-        self._process()
+        else:
+            self._process()
 
     def _next_frame(self) -> None:
         displayed_index = self.replay_index
@@ -477,7 +478,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self.original.set_array(packet.image)
         if self.recorder:
             self.recorder.append(packet)
-        self._process()
+        if self.tabs.currentIndex() != 0:
+            self._process()
 
     def _discover_cameras(self) -> None:
         self.camera_combo.clear()
@@ -642,13 +644,17 @@ class MainWindow(QtWidgets.QMainWindow):
 
     @QtCore.Slot(int)
     def _active_view_changed(self, index: int) -> None:
-        if index == 0 and self.last_original is not None:
-            self.original.set_array(self.last_original)
+        if index == 0:
+            if self.last_original is not None:
+                self.original.set_array(self.last_original)
             return
-        if index == 2 and self.last_result is not None and not self.last_result.intermediates:
+
+        # Original is deliberately a camera/recording baseline. Processing starts
+        # only when a processed/debug view is requested.
+        if self.history:
             self._process()
-            return
-        self._schedule_visualization()
+        else:
+            self._schedule_visualization()
 
     def _schedule_visualization(self) -> None:
         if self.tabs.currentIndex() == 0:
