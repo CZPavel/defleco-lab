@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 from importlib.resources import files
 
-from defleco_lab.processing.registry import load_builtin_methods, registry
+from defleco_lab.processing import load_builtin_methods
+from defleco_lab.processing.registry import registry
 
 
 def test_all_presets_reference_valid_method_parameters() -> None:
