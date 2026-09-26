@@ -80,7 +80,7 @@ class TemporalStatistics(ProcessingMethod):
         },
     )
 
-    def _process(self, frames, **_):
+    def _process(self, frames, **context):
         n = int(self.parameters["window"])
         stride = int(self.parameters["stride"])
         need = 1 + (n - 1) * stride
@@ -89,17 +89,29 @@ class TemporalStatistics(ProcessingMethod):
         stack = np.stack([gray32(frames[-1 - i * stride]) for i in reversed(range(n))])
         lo = float(self.parameters["percentile_low"])
         hi = float(self.parameters["percentile_high"])
-        maps = {
-            "mean": stack.mean(0),
-            "median": np.median(stack, 0),
-            "std": stack.std(0),
-            "range": np.ptp(stack, axis=0),
-            "percentile_range": np.percentile(stack, hi, axis=0) - np.percentile(stack, lo, axis=0),
-        }
-        return ProcessingResult(
-            maps[self.parameters["output"]].astype(np.float32),
-            {k: v.astype(np.float32) for k, v in maps.items()},
-        )
+        output = self.parameters["output"]
+        keep = context.get("keep_intermediates", True)
+
+        def compute(name):
+            if name == "mean":
+                return stack.mean(0)
+            if name == "median":
+                return np.median(stack, 0)
+            if name == "std":
+                return stack.std(0)
+            if name == "range":
+                return np.ptp(stack, axis=0)
+            if name == "percentile_range":
+                return np.percentile(stack, hi, axis=0) - np.percentile(stack, lo, axis=0)
+            raise ValueError(f"Unsupported temporal output: {name}")
+
+        primary = compute(output).astype(np.float32)
+        if not keep:
+            return ProcessingResult(primary)
+        maps = {name: compute(name).astype(np.float32) for name in (
+            "mean", "median", "std", "range", "percentile_range"
+        )}
+        return ProcessingResult(primary, maps)
 
 
 class TemporalMedianResidual(ProcessingMethod):
@@ -160,7 +172,7 @@ class FarnebackFlow(ProcessingMethod):
         },
     )
 
-    def _process(self, frames, **_):
+    def _process(self, frames, **context):
         old, cur = _pair(frames, int(self.parameters["stride"]))
         scale = float(self.parameters["scale"])
         if scale != 1:
@@ -183,21 +195,42 @@ class FarnebackFlow(ProcessingMethod):
         if scale != 1:
             flow = cv2.resize(flow, (frames[-1].shape[1], frames[-1].shape[0]))
         u, v = flow[..., 0], flow[..., 1]
-        mag, angle = cv2.cartToPolar(u, v)
-        sx = cv2.GaussianBlur(u, (0, 0), float(p["residual_sigma"]))
-        sy = cv2.GaussianBlur(v, (0, 0), float(p["residual_sigma"]))
-        local = np.hypot(u - sx, v - sy)
+        output = p["output"]
+        keep = context.get("keep_intermediates", True)
+
+        def selected_map(name):
+            if name == "u":
+                return u
+            if name == "v":
+                return v
+            if name == "magnitude":
+                return np.hypot(u, v)
+            if name == "angle":
+                return np.arctan2(v, u).astype(np.float32)
+            if name == "divergence":
+                return cv2.Sobel(u, cv2.CV_32F, 1, 0) + cv2.Sobel(v, cv2.CV_32F, 0, 1)
+            if name == "curl":
+                return cv2.Sobel(v, cv2.CV_32F, 1, 0) - cv2.Sobel(u, cv2.CV_32F, 0, 1)
+            if name == "local_residual":
+                sx = cv2.GaussianBlur(u, (0, 0), float(p["residual_sigma"]))
+                sy = cv2.GaussianBlur(v, (0, 0), float(p["residual_sigma"]))
+                return np.hypot(u - sx, v - sy)
+            raise ValueError(f"Unsupported flow output: {name}")
+
+        primary = selected_map(output)
+        if not keep:
+            return ProcessingResult(primary)
         maps = {
             "u": u,
             "v": v,
-            "magnitude": mag,
-            "angle": angle,
-            "divergence": cv2.Sobel(u, cv2.CV_32F, 1, 0) + cv2.Sobel(v, cv2.CV_32F, 0, 1),
-            "curl": cv2.Sobel(v, cv2.CV_32F, 1, 0) - cv2.Sobel(u, cv2.CV_32F, 0, 1),
-            "local_residual": local,
+            "magnitude": selected_map("magnitude"),
+            "angle": selected_map("angle"),
+            "divergence": selected_map("divergence"),
+            "curl": selected_map("curl"),
+            "local_residual": selected_map("local_residual"),
             "flow": flow,
         }
-        return ProcessingResult(maps[p["output"]], maps)
+        return ProcessingResult(primary, maps)
 
 
 class DISFlow(ProcessingMethod):
@@ -215,7 +248,7 @@ class DISFlow(ProcessingMethod):
         },
     )
 
-    def _process(self, frames, **_):
+    def _process(self, frames, **context):
         if not hasattr(cv2, "DISOpticalFlow_create"):
             raise RuntimeError("OpenCV DIS optical flow unavailable")
         old, cur = _pair(frames, int(self.parameters["stride"]))
@@ -228,9 +261,25 @@ class DISFlow(ProcessingMethod):
             old.astype(np.uint8), cur.astype(np.uint8), None
         )
         u, v = flow[..., 0], flow[..., 1]
-        mag, ang = cv2.cartToPolar(u, v)
-        maps = {"u": u, "v": v, "magnitude": mag, "angle": ang, "flow": flow}
-        return ProcessingResult(maps[self.parameters["output"]], maps)
+        output = self.parameters["output"]
+        if output == "u":
+            primary = u
+        elif output == "v":
+            primary = v
+        elif output == "angle":
+            primary = np.arctan2(v, u).astype(np.float32)
+        else:
+            primary = np.hypot(u, v)
+        if not context.get("keep_intermediates", True):
+            return ProcessingResult(primary)
+        maps = {
+            "u": u,
+            "v": v,
+            "magnitude": np.hypot(u, v),
+            "angle": np.arctan2(v, u).astype(np.float32),
+            "flow": flow,
+        }
+        return ProcessingResult(primary, maps)
 
 
 class LocalPhaseCorrelation(ProcessingMethod):
@@ -269,9 +318,10 @@ class LocalPhaseCorrelation(ProcessingMethod):
         w = int(self.parameters["window_size"])
         gs = int(self.parameters["grid_stride"])
         win = cv2.createHanningWindow((w, w), cv2.CV_32F)
-        dx = np.full(old.shape, np.nan, np.float32)
-        dy = dx.copy()
-        q = dx.copy()
+        sum_dx = np.zeros(old.shape, np.float32)
+        sum_dy = np.zeros(old.shape, np.float32)
+        sum_q = np.zeros(old.shape, np.float32)
+        count = np.zeros(old.shape, np.float32)
         overlays = []
         for y in range(0, old.shape[0] - w + 1, gs):
             for x in range(0, old.shape[1] - w + 1, gs):
@@ -283,9 +333,11 @@ class LocalPhaseCorrelation(ProcessingMethod):
                     *shift
                 ) <= float(self.parameters["max_displacement"])
                 if valid:
-                    dx[y : y + w, x : x + w] = shift[0]
-                    dy[y : y + w, x : x + w] = shift[1]
-                    q[y : y + w, x : x + w] = response
+                    region = np.s_[y : y + w, x : x + w]
+                    sum_dx[region] += shift[0]
+                    sum_dy[region] += shift[1]
+                    sum_q[region] += response
+                    count[region] += 1
                     overlays.append(
                         {
                             "x": x + w / 2,
@@ -295,6 +347,13 @@ class LocalPhaseCorrelation(ProcessingMethod):
                             "q": response,
                         }
                     )
+        valid_pixels = count > 0
+        dx = np.full(old.shape, np.nan, np.float32)
+        dy = np.full(old.shape, np.nan, np.float32)
+        q = np.full(old.shape, np.nan, np.float32)
+        dx[valid_pixels] = sum_dx[valid_pixels] / count[valid_pixels]
+        dy[valid_pixels] = sum_dy[valid_pixels] / count[valid_pixels]
+        q[valid_pixels] = sum_q[valid_pixels] / count[valid_pixels]
         mag = np.hypot(dx, dy)
         return ProcessingResult(
             np.nan_to_num(mag),
@@ -326,16 +385,38 @@ class TemporalFusion(ProcessingMethod):
         },
     )
 
-    def _process(self, frames, **_):
+    def _process(self, frames, **context):
         n = int(self.parameters["pairs"])
         stride = int(self.parameters["stride"])
         cur = gray32(frames[-1])
-        maps = np.stack([np.abs(cur - gray32(frames[-1 - i * stride])) for i in range(1, n + 1)])
         mode = self.parameters["mode"]
+        keep = context.get("keep_intermediates", True)
+
+        if not keep and mode in {"max", "mean"}:
+            accumulator = None
+            for i in range(1, n + 1):
+                response = np.abs(cur - gray32(frames[-1 - i * stride]))
+                if accumulator is None:
+                    accumulator = response.copy()
+                elif mode == "max":
+                    np.maximum(accumulator, response, out=accumulator)
+                else:
+                    accumulator += response
+            assert accumulator is not None
+            if mode == "mean":
+                accumulator /= n
+            return ProcessingResult(accumulator.astype(np.float32, copy=False))
+
+        maps = np.stack(
+            [np.abs(cur - gray32(frames[-1 - i * stride])) for i in range(1, n + 1)]
+        )
         out = {
             "max": lambda: maps.max(0),
             "mean": lambda: maps.mean(0),
             "median": lambda: np.median(maps, 0),
-            "percentile": lambda: np.percentile(maps, float(self.parameters["percentile"]), axis=0),
+            "percentile": lambda: np.percentile(
+                maps, float(self.parameters["percentile"]), axis=0
+            ),
         }[mode]()
-        return ProcessingResult(out.astype(np.float32), {"pair_responses": maps})
+        intermediates = {"pair_responses": maps} if keep else {}
+        return ProcessingResult(out.astype(np.float32), intermediates)
