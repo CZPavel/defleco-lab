@@ -54,7 +54,7 @@ def main() -> int:
         f"unchanged {raw_error:.3f} -> {compensated_error:.3f}; "
         f"localized residual {defect_residual:.3f}"
     )
-    print("Hardware acceptance: NOT TESTED")
+    print("Hardware acceptance: outside this hardware-independent synthetic test")
     return 0
 
 

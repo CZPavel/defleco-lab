@@ -4,6 +4,7 @@ import json
 from collections import deque
 from importlib.resources import files
 from pathlib import Path
+from time import perf_counter
 
 import cv2
 import numpy as np
@@ -15,10 +16,11 @@ from defleco_lab.camera.synthetic_source import SyntheticSource
 from defleco_lab.processing.registry import registry
 from defleco_lab.runtime.acquisition_worker import BaslerAcquisitionWorker
 from defleco_lab.runtime.processing_worker import ProcessingRequest, ProcessingWorker
-from defleco_lab.sessions import AsyncSessionRecorder, load_session
+from defleco_lab.sessions import AsyncSessionRecorder, load_session, replay_history
 
 from .image_viewer import ImageViewer
 from .parameter_panel import ParameterPanel
+from .visualization import VisualizationPanel, VisualizationSettings, VisualizationTransform
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -27,13 +29,23 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setWindowTitle("Defleco LAB - Experimental Research Software")
         self.resize(1500, 900)
         self.source = SyntheticSource()
-        self.history = deque(maxlen=64)
+        self.history = deque(maxlen=512)
         self.replay = []
         self.replay_index = 0
         self.recorder: AsyncSessionRecorder | None = None
         self.camera_worker: BaslerAcquisitionWorker | None = None
         self.last_result = None
+        self.last_original: np.ndarray | None = None
+        self.compare_reference: np.ndarray | None = None
+        self.compare_reference_mask: np.ndarray | None = None
+        self.visualization_transform = VisualizationTransform()
+        self.visualization_settings = VisualizationSettings()
         self.processing_drops = 0
+        self.received_fps = 0.0
+        self.processed_fps = 0.0
+        self._source_times: deque[float] = deque(maxlen=120)
+        self._processed_times: deque[float] = deque(maxlen=120)
+        self.camera_metrics: dict[str, float | int] = {}
         self.timer = QtCore.QTimer(self)
         self.timer.setInterval(60)
         self.timer.timeout.connect(self._next_frame)
@@ -45,7 +57,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.processor.start()
         self._build_ui()
         self._load_methods()
-        self.statusBar().showMessage("Ready - synthetic source - hardware NOT TESTED")
+        self.statusBar().showMessage("Ready - synthetic source - camera idle")
         self._next_frame()
 
     def _build_ui(self) -> None:
@@ -86,7 +98,7 @@ class MainWindow(QtWidgets.QMainWindow):
         toolbar = self.addToolBar("Status")
         self.state_label = QtWidgets.QLabel("FROZEN")
         self.metrics = QtWidgets.QLabel(
-            "Camera 0.0 FPS | Processing 0.0 ms | Shift N/A | Q N/A | Drops 0"
+            "Source 0.0 FPS | Processed 0.0 FPS | Processing 0.0 ms | Drops 0"
         )
         toolbar.addWidget(self.state_label)
         toolbar.addSeparator()
@@ -219,9 +231,17 @@ class MainWindow(QtWidgets.QMainWindow):
         rform.addLayout(options)
         self.params = ParameterPanel()
         rform.addWidget(self.params)
+        self.visualization = VisualizationPanel()
+        self.visualization.settingsChanged.connect(self._visualization_changed)
+        self.visualization.rangeReset.connect(self.visualization_transform.reset_range)
+        self.visualization.compareReferenceRequested.connect(self._set_compare_reference)
+        rform.addWidget(self.visualization)
         apply = QtWidgets.QPushButton("Apply / Process")
         apply.clicked.connect(self._process)
         rform.addWidget(apply)
+        reset_motion = QtWidgets.QPushButton("Reset motion position")
+        reset_motion.clicked.connect(self._reset_motion_position)
+        rform.addWidget(reset_motion)
         self.help = QtWidgets.QTextBrowser()
         self.help.setMinimumHeight(240)
         rform.addWidget(self.help)
@@ -236,6 +256,7 @@ class MainWindow(QtWidgets.QMainWindow):
             ("1:1", self._actual),
             ("Previous", lambda: self._seek(-1)),
             ("Next", lambda: self._seek(1)),
+            ("Play / Pause", self._toggle_replay),
             ("Snapshot", self._snapshot),
             ("Fullscreen", self._fullscreen),
         ]:
@@ -265,11 +286,16 @@ class MainWindow(QtWidgets.QMainWindow):
         if not mid:
             return
         info = next(i for i in registry.infos() if i.id == mid)
-        self.params.set_schema(info.parameters)
+        self.params.set_schema(
+            {key: value for key, value in info.parameters.items() if key != "stride"}
+        )
         self.help.setMarkdown(
             f"### {info.name}\n\n{info.description}\n\n**Frames:** {info.required_frames}\n\n**Recommended use:** {info.recommended_use or 'Exploratory comparison.'}\n\n**Limitations:** {info.limitations or 'Scene-dependent; not a metrological result.'}\n\n**Motion compensation:** {'supported' if info.supports_motion_compensation else 'not normally required'}\n\n**References:** {', '.join(info.references) if info.references else 'See docs/references.md.'}"
         )
-        self._process()
+        if self.replay:
+            self._seek_absolute(self.slider.value())
+        else:
+            self._process()
 
     def _preset_changed(self, index: int) -> None:
         if index <= 0:
@@ -281,9 +307,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.stride.setValue(int(p.get("frame_stride", 1)))
         self.scale.setCurrentText(f"{int(p.get('processing_scale', 1) * 100)}%")
         self.comp.setChecked(bool(p.get("motion_compensation", False)))
-        for k, v in p.get("parameters", {}).items():
-            if k in self.params.editors:
-                self.params.editors[k].setText(json.dumps(v))
+        self.params.set_values(p.get("parameters", {}))
         self._process()
 
     def _change_pattern(self, name: str) -> None:
@@ -291,11 +315,24 @@ class MainWindow(QtWidgets.QMainWindow):
         self.source._base = self.source._make_base()
         self.source.reset()
         self.history.clear()
+        self.compare_reference = None
+        self.compare_reference_mask = None
+        self.visualization_transform.reset_range()
+        self.processor.reset_state()
+        self._source_times.clear()
+        self._processed_times.clear()
+        self.received_fps = 0.0
+        self.processed_fps = 0.0
+        self.camera_metrics = {}
         self._next_frame()
 
     def _start(self):
         selected_source = self.source_combo.currentText()
         self._stop()
+        self.compare_reference = None
+        self.compare_reference_mask = None
+        self.visualization_transform.reset_range()
+        self.processor.reset_state()
         if selected_source == "Synthetic":
             self.replay = []
             self.history.clear()
@@ -316,9 +353,8 @@ class MainWindow(QtWidgets.QMainWindow):
                     )
             self.camera_worker = BaslerAcquisitionWorker(descriptor, temporary, self)
             self.camera_worker.frameReady.connect(self._receive_packet)
-            self.camera_worker.failed.connect(
-                lambda message: self.statusBar().showMessage(f"Camera: {message}")
-            )
+            self.camera_worker.failed.connect(self._camera_failed)
+            self.camera_worker.metricsReady.connect(self._camera_metrics)
             self.camera_worker.restoreReport.connect(self._camera_restored)
             self.camera_worker.applyReport.connect(
                 lambda report: self.statusBar().showMessage(f"Temporary camera readback: {report}")
@@ -382,7 +418,14 @@ class MainWindow(QtWidgets.QMainWindow):
 
     @QtCore.Slot(object)
     def _receive_packet(self, packet) -> None:
+        now = perf_counter()
+        self._source_times.append(now)
+        if len(self._source_times) > 1:
+            self.received_fps = (len(self._source_times) - 1) / max(
+                self._source_times[-1] - self._source_times[0], 1e-9
+            )
         self.history.append(packet)
+        self.last_original = packet.image
         self.original.set_array(packet.image)
         self.compare_left.set_array(packet.image)
         if self.recorder:
@@ -412,6 +455,15 @@ class MainWindow(QtWidgets.QMainWindow):
                 "Camera closed; temporary settings restored where applicable"
             )
 
+    @QtCore.Slot(str)
+    def _camera_failed(self, message: str) -> None:
+        self.state_label.setText("ERROR")
+        self.statusBar().showMessage(f"Camera: {message}")
+
+    @QtCore.Slot(object)
+    def _camera_metrics(self, metrics: dict[str, float | int]) -> None:
+        self.camera_metrics = dict(metrics)
+
     def _process(self) -> None:
         mid = self.method_combo.currentData() if hasattr(self, "method_combo") else None
         if not mid or not self.history:
@@ -422,6 +474,11 @@ class MainWindow(QtWidgets.QMainWindow):
         method = registry.create(mid, **parameters)
         needed = method.history_requirement()
         if len(self.history) < needed:
+            self.last_result = None
+            self._clear_processed_views()
+            self.statusBar().showMessage(
+                f"Insufficient history: {len(self.history)}/{needed} frames"
+            )
             return
         frames = [packet.image for packet in list(self.history)[-needed:]]
         scale = {"100%": 1.0, "50%": 0.5, "25%": 0.25}[self.scale.currentText()]
@@ -457,14 +514,25 @@ class MainWindow(QtWidgets.QMainWindow):
                 deadband=self.motion_deadband.value(),
                 max_shift=self.max_shift.value(),
                 frame_id=self.history[-1].frame_id,
+                motion_frames=list(self.history),
             )
         )
+
+    def _reset_motion_position(self) -> None:
+        self.processor.reset_state()
+        self.statusBar().showMessage("Motion position reset to 0 px")
 
     @QtCore.Slot(object, float, float, int, object, int)
     def _processing_complete(
         self, result, elapsed: float, scale: float, stride: int, motion, frame_id: int
     ) -> None:
         self.last_result = result
+        now = perf_counter()
+        self._processed_times.append(now)
+        if len(self._processed_times) > 1:
+            self.processed_fps = (len(self._processed_times) - 1) / max(
+                self._processed_times[-1] - self._processed_times[0], 1e-9
+            )
         self.processing_drops = self.processor.dropped
         for packet in reversed(self.history):
             if packet.frame_id == frame_id:
@@ -479,10 +547,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 float(motion["quality"]),
                 float(motion["cumulative"]),
             )
-        self.processed.set_array(result.primary, heatmap=True)
-        if result.intermediates:
-            self.intermediate.set_array(next(iter(result.intermediates.values())), heatmap=True)
-        self.compare_right.set_array(result.primary, heatmap=True)
+        self._render_visualization()
         if motion.get("mask") is not None:
             self.motion_debug.set_array(motion["mask"].astype(np.uint8) * 255)
         roi_summary = ""
@@ -497,8 +562,62 @@ class MainWindow(QtWidgets.QMainWindow):
                 f" | Recorder q={self.recorder.queue_size} drop={self.recorder.dropped}"
             )
         self.metrics.setText(
-            f"Source {self.source_combo.currentText()} | Processing {elapsed:.1f} ms | Scale {scale:.2f} | Stride {stride} | Shift {motion['shift']:.2f} px | Q {motion['quality']:.3f} | valid ROI {motion['valid']} | Processing drops {self.processing_drops}{recorder_state}{roi_summary}"
+            f"{self.source_combo.currentText()} {self.received_fps:.1f} FPS"
+            f" | Processed {self.processed_fps:.1f} FPS | Processing {elapsed:.1f} ms"
+            f" | Scale {scale:.2f} | Stride {stride} | Shift {motion['shift']:.2f} px"
+            f" | Position {motion['cumulative']:.2f} px | Q {motion['quality']:.3f}"
+            f" | valid Motion ROI {motion['valid']} | Processing drops {self.processing_drops}"
+            f"{recorder_state}{roi_summary}"
         )
+
+    @QtCore.Slot(object)
+    def _visualization_changed(self, settings: VisualizationSettings) -> None:
+        self.visualization_settings = settings
+        self._render_visualization()
+
+    def _render_visualization(self) -> None:
+        if self.last_result is None:
+            return
+        primary = self.visualization_transform.render(
+            self.last_result.primary,
+            self.visualization_settings,
+            self.last_original,
+            self.last_result.valid_mask,
+        )
+        self.processed.set_array(primary.image)
+        self.compare_right.set_array(primary.image)
+        if self.last_result.intermediates:
+            intermediate = self.visualization_transform.render(
+                next(iter(self.last_result.intermediates.values())),
+                self.visualization_settings,
+                self.last_original,
+                self.last_result.valid_mask,
+            )
+            self.intermediate.set_array(intermediate.image)
+        if self.compare_reference is not None:
+            reference = self.visualization_transform.render(
+                self.compare_reference,
+                self.visualization_settings,
+                self.last_original,
+                self.compare_reference_mask,
+            )
+            self.compare_left.set_array(reference.image)
+
+    def _set_compare_reference(self) -> None:
+        if self.last_result is None:
+            self.statusBar().showMessage("Process a response before setting a compare reference")
+            return
+        self.compare_reference = np.asarray(self.last_result.primary).copy()
+        self.compare_reference_mask = (
+            None
+            if self.last_result.valid_mask is None
+            else np.asarray(self.last_result.valid_mask, dtype=bool).copy()
+        )
+        if not self.visualization.lock_range.isChecked():
+            self.visualization.lock_range.setChecked(True)
+        self.visualization_transform.reset_range()
+        self._render_visualization()
+        self.statusBar().showMessage("Compare reference stored with a shared display range")
 
     def _record(self):
         root = QtWidgets.QFileDialog.getExistingDirectory(self, "Session root")
@@ -516,28 +635,72 @@ class MainWindow(QtWidgets.QMainWindow):
         path = QtWidgets.QFileDialog.getExistingDirectory(self, "Open recorded session")
         if path:
             self._stop()
+            self.source_combo.setCurrentText("Recorded Session")
             self.replay = load_session(Path(path))
             self.replay_index = 0
             self.slider.setRange(0, max(0, len(self.replay) - 1))
             self.history.clear()
+            self.compare_reference = None
+            self.compare_reference_mask = None
+            self.visualization_transform.reset_range()
+            self.processor.reset_state()
             self.state_label.setText("REPLAY")
             self._seek_absolute(0)
-            if len(self.replay) > 1:
-                self.replay_index = 1
 
     def _seek(self, delta):
-        self._seek_absolute(self.replay_index + delta)
+        self._seek_absolute(self.slider.value() + delta)
+
+    def _toggle_replay(self) -> None:
+        if not self.replay:
+            self.statusBar().showMessage("Load a recorded session before replay")
+            return
+        if self.timer.isActive():
+            self.timer.stop()
+            self.state_label.setText("FROZEN")
+        else:
+            if (
+                self.replay_index >= len(self.replay) - 1
+                or self.slider.value() >= len(self.replay) - 1
+            ):
+                self.replay_index = 0
+                self.history.clear()
+                self.processor.reset_state()
+            else:
+                self.replay_index = self.slider.value() + 1
+            self.state_label.setText("REPLAY")
+            self.timer.start()
 
     def _seek_absolute(self, index):
         if not self.replay:
             return
         self.replay_index = max(0, min(index, len(self.replay) - 1))
+        self.slider.blockSignals(True)
+        self.slider.setValue(self.replay_index)
+        self.slider.blockSignals(False)
+        self.processor.reset_state()
         self.history.clear()
         packet = self.replay[self.replay_index]
-        self.history.append(packet)
+        self.last_original = packet.image
         self.original.set_array(packet.image)
         self.compare_left.set_array(packet.image)
+        mid = self.method_combo.currentData()
+        parameters = self.params.values()
+        parameters["stride"] = self.stride.value()
+        needed = registry.create(mid, **parameters).history_requirement() if mid else 1
+        reconstructed = replay_history(self.replay, self.replay_index, needed)
+        if not reconstructed:
+            self.last_result = None
+            self._clear_processed_views()
+            self.statusBar().showMessage(
+                f"Insufficient history: frame {self.replay_index} needs {needed} frames"
+            )
+            return
+        self.history.extend(reconstructed)
         self._process()
+
+    def _clear_processed_views(self) -> None:
+        for viewer in (self.processed, self.intermediate, self.compare_right, self.motion_debug):
+            viewer.clear_image()
 
     def _fit(self):
         [

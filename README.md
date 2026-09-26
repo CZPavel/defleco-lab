@@ -2,7 +2,7 @@
 
 Defleco LAB is an independent, experimental Windows desktop laboratory for comparing image-processing methods on reflected dynamic patterns. It is intended for research on local disturbances visible on glossy or specular surfaces using synthetic data, recorded sequences, image sequences, or an explicitly selected Basler camera.
 
-> This is research software, not a calibrated measurement system, production inspection, or safety component. No metrological accuracy is claimed. Camera hardware behavior is **NOT TESTED** in this release.
+> This is research software, not a calibrated measurement system, production inspection, or safety component. No metrological accuracy is claimed. A bounded hardware smoke test is documented below; optical performance, trigger/PTP behavior, and production throughput remain **NOT TESTED**.
 
 ![Defleco LAB with a generated synthetic fringe scene](docs/assets/synthetic-lab.png)
 
@@ -13,7 +13,7 @@ Defleco LAB is an independent, experimental Windows desktop laboratory for compa
 - One-axis image-motion estimation from multiple dedicated Motion ROIs, quality gating, robust median fusion, cumulative position, and masked translation compensation.
 - Deterministic synthetic fringes, grid, checkerboard, speckle, translation, and localized deformation.
 - Raw-frame record/replay so the same sequence can be evaluated repeatedly with different algorithms.
-- PySide6 engineering UI with zoom, pan, fit, 1:1, compare views, editable parameters, presets, Analysis ROIs, and Motion ROIs.
+- Dark PySide6 engineering UI with typed parameters, display-only range/heatmap/alpha controls, shared compare ranges, zoom, pan, presets, Analysis ROIs, and Motion ROIs.
 - CPU baseline; OpenCV CUDA is not required.
 
 ## Install on Windows
@@ -62,7 +62,13 @@ Algorithms implement a common metadata-rich interface; the parameter panel is ge
 .\.venv\Scripts\python.exe tools\synthetic_acceptance.py
 ```
 
-Normal CI needs no camera. A separate bounded manual smoke test is documented but hardware remains **NOT TESTED** until its result is recorded for an exact model/runtime/setup.
+Normal CI needs no camera and remains hardware-independent.
+
+### Bounded hardware smoke test
+
+On 2026-09-26, one Basler `a2A2448-23gmBAS` (`BaslerGigE`) was smoke tested on Windows with pylon Runtime `12.2.0.1265` and pypylon `26.6`. Exact-descriptor discovery/opening, native `Mono8` acquisition, a harmless temporary `ExposureTime` readback, rollback, GUI live preview, Structure Tensor processing, local raw recording, reload, and Farneback replay passed. The final bounded raw run received 61 frames in 10.164 s (6.001 FPS), with 0 timeouts and 0 grab errors; BlockID and camera timestamp were monotonic. The local frames/session were not committed.
+
+The test does not establish calibrated deflectometry, optical quality, maximum sustained link throughput, external trigger/PTP behavior, GPIO behavior, firmware behavior, or suitability for production inspection. Persistent User Sets and network settings were not tested or changed.
 
 ## Scientific context and limitations
 

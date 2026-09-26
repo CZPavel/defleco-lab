@@ -21,7 +21,17 @@ class FrameDifference(ProcessingMethod):
         2,
         True,
         "Absolute intensity change.",
-        parameters={"stride": 1, "blur_sigma": 0.0, "local_normalization": False},
+        parameters={
+            "stride": 1,
+            "blur_sigma": {
+                "default": 0.0,
+                "minimum": 0.0,
+                "maximum": 100.0,
+                "step": 0.1,
+                "units": "px",
+            },
+            "local_normalization": False,
+        },
     )
 
     def _process(self, frames, **context):
@@ -47,11 +57,26 @@ class TemporalStatistics(ProcessingMethod):
         True,
         "N-frame mean, median, standard deviation and ranges.",
         parameters={
-            "window": 8,
+            "window": {"default": 8, "minimum": 2, "maximum": 256, "units": "frames"},
             "stride": 1,
-            "percentile_low": 10.0,
-            "percentile_high": 90.0,
-            "output": "std",
+            "percentile_low": {
+                "default": 10.0,
+                "minimum": 0.0,
+                "maximum": 100.0,
+                "step": 1.0,
+                "units": "%",
+            },
+            "percentile_high": {
+                "default": 90.0,
+                "minimum": 0.0,
+                "maximum": 100.0,
+                "step": 1.0,
+                "units": "%",
+            },
+            "output": {
+                "default": "std",
+                "choices": ["mean", "median", "std", "range", "percentile_range"],
+            },
         },
     )
 
@@ -85,7 +110,10 @@ class TemporalMedianResidual(ProcessingMethod):
         2,
         True,
         "Current frame minus temporal median.",
-        parameters={"window": 5, "stride": 1},
+        parameters={
+            "window": {"default": 5, "minimum": 2, "maximum": 256, "units": "frames"},
+            "stride": 1,
+        },
     )
 
     def _process(self, frames, **_):
@@ -110,16 +138,25 @@ class FarnebackFlow(ProcessingMethod):
         "Dense two-frame optical flow.",
         parameters={
             "stride": 1,
-            "pyr_scale": 0.5,
-            "levels": 3,
-            "winsize": 15,
-            "iterations": 3,
-            "poly_n": 5,
-            "poly_sigma": 1.2,
-            "flags": 0,
-            "scale": 1.0,
-            "output": "magnitude",
-            "residual_sigma": 8.0,
+            "pyr_scale": {"default": 0.5, "minimum": 0.01, "maximum": 0.99, "step": 0.05},
+            "levels": {"default": 3, "minimum": 1, "maximum": 16},
+            "winsize": {"default": 15, "minimum": 3, "maximum": 255, "step": 2, "units": "px"},
+            "iterations": {"default": 3, "minimum": 1, "maximum": 100},
+            "poly_n": {"default": 5, "choices": [5, 7]},
+            "poly_sigma": {"default": 1.2, "minimum": 0.1, "maximum": 10.0, "step": 0.1},
+            "flags": {"default": 0, "minimum": 0, "maximum": 1024},
+            "scale": {"default": 1.0, "minimum": 0.1, "maximum": 1.0, "step": 0.1},
+            "output": {
+                "default": "magnitude",
+                "choices": ["u", "v", "magnitude", "angle", "divergence", "curl", "local_residual"],
+            },
+            "residual_sigma": {
+                "default": 8.0,
+                "minimum": 0.1,
+                "maximum": 500.0,
+                "step": 0.5,
+                "units": "px",
+            },
         },
     )
 
@@ -171,7 +208,11 @@ class DISFlow(ProcessingMethod):
         2,
         True,
         "Fast dense inverse-search optical flow.",
-        parameters={"stride": 1, "preset": "medium", "output": "magnitude"},
+        parameters={
+            "stride": 1,
+            "preset": {"default": "medium", "choices": ["ultrafast", "fast", "medium"]},
+            "output": {"default": "magnitude", "choices": ["u", "v", "magnitude", "angle"]},
+        },
     )
 
     def _process(self, frames, **_):
@@ -203,11 +244,23 @@ class LocalPhaseCorrelation(ProcessingMethod):
         limitations="Local correlation, not full scientific DIC.",
         parameters={
             "stride": 1,
-            "window_size": 32,
-            "grid_stride": 16,
-            "minimum_texture": 3.0,
-            "minimum_q": 0.05,
-            "max_displacement": 20.0,
+            "window_size": {"default": 32, "minimum": 8, "maximum": 512, "step": 2, "units": "px"},
+            "grid_stride": {"default": 16, "minimum": 1, "maximum": 512, "units": "px"},
+            "minimum_texture": {"default": 3.0, "minimum": 0.0, "maximum": 255.0, "step": 0.1},
+            "minimum_q": {
+                "default": 0.05,
+                "minimum": -1.0,
+                "maximum": 1.0,
+                "step": 0.01,
+                "decimals": 3,
+            },
+            "max_displacement": {
+                "default": 20.0,
+                "minimum": 0.0,
+                "maximum": 10000.0,
+                "step": 1.0,
+                "units": "px",
+            },
         },
     )
 
@@ -259,7 +312,18 @@ class TemporalFusion(ProcessingMethod):
         2,
         True,
         "Fuses response maps from multiple pairs.",
-        parameters={"pairs": 4, "stride": 1, "mode": "max", "percentile": 90.0},
+        parameters={
+            "pairs": {"default": 4, "minimum": 1, "maximum": 256},
+            "stride": 1,
+            "mode": {"default": "max", "choices": ["max", "mean", "median", "percentile"]},
+            "percentile": {
+                "default": 90.0,
+                "minimum": 0.0,
+                "maximum": 100.0,
+                "step": 1.0,
+                "units": "%",
+            },
+        },
     )
 
     def _process(self, frames, **_):

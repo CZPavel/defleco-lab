@@ -33,6 +33,8 @@ class ProcessingRequest:
     deadband: float = 0.0
     max_shift: float = 50.0
     frame_id: int = -1
+    motion_frames: list[Any] | None = None
+    generation: int = 0
 
 
 class ProcessingWorker(QtCore.QThread):
@@ -49,13 +51,92 @@ class ProcessingWorker(QtCore.QThread):
         self.dropped = 0
         self._cumulative_position = 0.0
         self._last_motion_frame_id = -1
+        self._last_motion_image: np.ndarray | None = None
+        self._generation = 0
 
     def submit(self, request: ProcessingRequest) -> None:
         with self._condition:
             if self._request is not None:
                 self.dropped += 1
+            request.generation = self._generation
             self._request = request
             self._condition.notify()
+
+    def reset_state(self) -> None:
+        """Start a new experiment and invalidate queued results from the old one."""
+        with self._condition:
+            self._generation += 1
+            self._request = None
+            self._cumulative_position = 0.0
+            self._last_motion_frame_id = -1
+            self._last_motion_image = None
+
+    @staticmethod
+    def _calculate_cumulative_motion(
+        request: ProcessingRequest,
+        motion: dict[str, Any],
+        cumulative_position: float,
+        last_motion_frame_id: int,
+        last_motion_image: np.ndarray | None,
+    ) -> tuple[float, int, np.ndarray | None]:
+        """Integrate every available source-frame pair, including skipped display work."""
+        packets = sorted(request.motion_frames or [], key=lambda packet: packet.frame_id)
+        if not request.motion_compensation or not packets:
+            motion["cumulative"] = cumulative_position
+            return cumulative_position, last_motion_frame_id, last_motion_image
+        packets = [packet for packet in packets if packet.frame_id > last_motion_frame_id]
+        previous = last_motion_image
+        if previous is None:
+            first = packets.pop(0) if packets else None
+            if first is not None:
+                previous = first.image
+                last_motion_frame_id = first.frame_id
+                last_motion_image = first.image.copy()
+        if request.motion_mode == "auto":
+            roi_specs = request.motion_rois or []
+            rois = [MotionROI(**roi) for roi in roi_specs]
+            estimator = PhaseMotionEstimator(
+                axis=request.motion_axis,
+                preprocessing=request.motion_preprocessing,
+                minimum_texture=request.minimum_texture,
+                minimum_q=request.minimum_q,
+                deadband=request.deadband,
+                max_shift=request.max_shift,
+            )
+        for packet in packets:
+            if previous is None:
+                previous = packet.image
+                continue
+            if request.motion_mode == "manual":
+                shift = request.manual_shift_px
+            else:
+                estimate = estimator.estimate(previous, packet.image, rois)
+                if not estimate.valid:
+                    raise ValueError("Motion estimate invalid in skipped-frame history")
+                shift = estimate.shift_px
+                motion.update(
+                    shift=shift,
+                    quality=estimate.quality,
+                    valid=estimate.valid_count,
+                    roi_results=estimate.roi_results,
+                )
+            cumulative_position += float(shift)
+            previous = packet.image
+            last_motion_frame_id = packet.frame_id
+            last_motion_image = packet.image.copy()
+        motion["cumulative"] = cumulative_position
+        return cumulative_position, last_motion_frame_id, last_motion_image
+
+    def _accumulate_motion(self, request: ProcessingRequest, motion: dict[str, Any]) -> None:
+        """Synchronous helper retained for focused tests and non-threaded callers."""
+        state = self._calculate_cumulative_motion(
+            request,
+            motion,
+            self._cumulative_position,
+            self._last_motion_frame_id,
+            self._last_motion_image,
+        )
+        self._cumulative_position, self._last_motion_frame_id, self._last_motion_image = state
 
     def stop(self) -> bool:
         with self._condition:
@@ -175,10 +256,23 @@ class ProcessingWorker(QtCore.QThread):
                                     valid_mask[..., None], value, 0
                                 )
                 elapsed = (perf_counter() - started) * 1000.0
-                if request.frame_id != self._last_motion_frame_id:
-                    self._cumulative_position += float(motion["shift"])
-                    self._last_motion_frame_id = request.frame_id
-                motion["cumulative"] = self._cumulative_position
+                with self._condition:
+                    if request.generation != self._generation:
+                        continue
+                    state = (
+                        self._cumulative_position,
+                        self._last_motion_frame_id,
+                        self._last_motion_image,
+                    )
+                state = self._calculate_cumulative_motion(request, motion, *state)
+                with self._condition:
+                    if request.generation != self._generation:
+                        continue
+                    (
+                        self._cumulative_position,
+                        self._last_motion_frame_id,
+                        self._last_motion_image,
+                    ) = state
                 self.completed.emit(
                     result, elapsed, request.scale, request.stride, motion, request.frame_id
                 )

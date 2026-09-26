@@ -19,7 +19,15 @@ class Gradient(ProcessingMethod):
         1,
         False,
         "Spatial intensity derivatives.",
-        parameters={"operator": "scharr", "sigma": 0.8, "ksize": 3, "normalize": True},
+        parameters={
+            "operator": {"default": "scharr", "choices": ["sobel", "scharr"]},
+            "sigma": {"default": 0.8, "minimum": 0.0, "maximum": 100.0, "step": 0.1, "units": "px"},
+            "ksize": {"default": 3, "minimum": 1, "maximum": 31, "step": 2},
+            "normalize": {
+                "default": True,
+                "tooltip": "Normalize magnitude to a display-friendly map.",
+            },
+        },
     )
 
     def _process(self, frames, **_):
@@ -45,7 +53,10 @@ class Laplacian(ProcessingMethod):
         1,
         False,
         "Second spatial derivative.",
-        parameters={"sigma": 0.8, "ksize": 3},
+        parameters={
+            "sigma": {"default": 0.8, "minimum": 0.0, "maximum": 100.0, "step": 0.1, "units": "px"},
+            "ksize": {"default": 3, "minimum": 1, "maximum": 31, "step": 2},
+        },
     )
 
     def _process(self, frames, **_):
@@ -66,7 +77,22 @@ class DifferenceOfGaussians(ProcessingMethod):
         1,
         False,
         "Band-pass residual.",
-        parameters={"sigma_small": 1.0, "sigma_large": 4.0},
+        parameters={
+            "sigma_small": {
+                "default": 1.0,
+                "minimum": 0.01,
+                "maximum": 100.0,
+                "step": 0.1,
+                "units": "px",
+            },
+            "sigma_large": {
+                "default": 4.0,
+                "minimum": 0.01,
+                "maximum": 200.0,
+                "step": 0.1,
+                "units": "px",
+            },
+        },
     )
 
     def _process(self, frames, **_):
@@ -83,7 +109,9 @@ class LocalBackgroundResidual(ProcessingMethod):
         1,
         False,
         "Subtracts a smooth Gaussian background.",
-        parameters={"sigma": 8.0},
+        parameters={
+            "sigma": {"default": 8.0, "minimum": 0.01, "maximum": 500.0, "step": 0.5, "units": "px"}
+        },
     )
 
     def _process(self, frames, **_):
@@ -102,10 +130,28 @@ class StructureTensor(ProcessingMethod):
         False,
         "Local orientation and anisotropy using pi-periodic double-angle smoothing.",
         parameters={
-            "operator": "scharr",
-            "derivative_sigma": 0.8,
-            "tensor_sigma": 2.0,
-            "orientation_smooth_sigma": 8.0,
+            "operator": {"default": "scharr", "choices": ["sobel", "scharr"]},
+            "derivative_sigma": {
+                "default": 0.8,
+                "minimum": 0.0,
+                "maximum": 100.0,
+                "step": 0.1,
+                "units": "px",
+            },
+            "tensor_sigma": {
+                "default": 2.0,
+                "minimum": 0.01,
+                "maximum": 200.0,
+                "step": 0.1,
+                "units": "px",
+            },
+            "orientation_smooth_sigma": {
+                "default": 8.0,
+                "minimum": 0.01,
+                "maximum": 500.0,
+                "step": 0.5,
+                "units": "px",
+            },
         },
     )
 
@@ -152,12 +198,19 @@ class GaborBank(ProcessingMethod):
         False,
         "Oriented frequency-selective filter bank.",
         parameters={
-            "periods": [12.0],
-            "orientations": 8,
-            "sigma": 5.0,
-            "gamma": 0.5,
-            "psi": 0.0,
-            "scale": 1.0,
+            "periods": {"default": [12.0], "type": "list", "item_type": "float", "units": "px"},
+            "orientations": {"default": 8, "minimum": 1, "maximum": 64},
+            "sigma": {"default": 5.0, "minimum": 0.1, "maximum": 200.0, "step": 0.1, "units": "px"},
+            "gamma": {"default": 0.5, "minimum": 0.01, "maximum": 10.0, "step": 0.05},
+            "psi": {
+                "default": 0.0,
+                "minimum": -6.2832,
+                "maximum": 6.2832,
+                "step": 0.1,
+                "decimals": 4,
+                "units": "rad",
+            },
+            "scale": {"default": 1.0, "minimum": 0.1, "maximum": 1.0, "step": 0.1},
         },
     )
 
@@ -238,7 +291,10 @@ class DirectionalResidual(ProcessingMethod):
         False,
         "Experimental orientation-binned line-background approximation.",
         limitations="Not a reproduction of a proprietary algorithm.",
-        parameters={"orientations": 8, "length": 21},
+        parameters={
+            "orientations": {"default": 8, "minimum": 1, "maximum": 64},
+            "length": {"default": 21, "minimum": 3, "maximum": 255, "step": 2, "units": "px"},
+        },
     )
 
     def _process(self, frames, **_):

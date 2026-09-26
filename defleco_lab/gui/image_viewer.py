@@ -77,6 +77,11 @@ class ImageViewer(QtWidgets.QGraphicsView):
         if self._fit:
             self.fit_to_window()
 
+    def clear_image(self) -> None:
+        self._image = None
+        self._pixmap.setPixmap(QtGui.QPixmap())
+        self.scene().setSceneRect(QtCore.QRectF())
+
     def fit_to_window(self) -> None:
         if not self._pixmap.pixmap().isNull():
             self.fitInView(self._pixmap, QtCore.Qt.AspectRatioMode.KeepAspectRatio)
