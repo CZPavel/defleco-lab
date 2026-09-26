@@ -59,3 +59,33 @@ def test_temporal_statistics_match_known_synthetic_sequence():
     frames = [np.full((8, 9), x, np.float32) for x in range(4)]
     r = TemporalStatistics(window=4).process(frames)
     assert np.allclose(r.intermediates["mean"], 1.5) and np.allclose(r.intermediates["range"], 3)
+
+
+
+def test_structure_tensor_can_use_orientation_residual_as_primary():
+    result = StructureTensor(output="orientation_residual").process([image()])
+    assert result.primary.shape == image().shape
+    assert np.isfinite(result.primary).all()
+    assert np.allclose(result.primary, result.intermediates["orientation_residual"])
+
+
+def test_gabor_can_use_orientation_residual_without_intermediate_stack():
+    result = GaborBank(
+        periods=[12],
+        orientations=4,
+        sigma=5,
+        output="orientation_residual",
+    ).process([image()], keep_intermediates=False)
+    assert result.primary.shape == image().shape
+    assert np.isfinite(result.primary).all()
+    assert result.intermediates == {}
+
+
+def test_gradient_default_preserves_raw_numeric_response():
+    result = Gradient().process([image()], keep_intermediates=False)
+    assert float(np.nanmax(result.primary)) > 1.0
+
+
+def test_unknown_processing_parameters_are_rejected():
+    with pytest.raises(ValueError, match="unknown parameter"):
+        StructureTensor(orientation_smoothing_sigma=8.0)

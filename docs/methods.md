@@ -4,12 +4,12 @@ All numeric processing uses floating-point arrays. Visualization normalization a
 
 ## Single frame
 
-- **Sobel / Scharr Gradient**: X, Y, and magnitude responses; useful for local slope/intensity changes but noise-sensitive.
+- **Sobel / Scharr Gradient**: X, Y, and magnitude responses; useful for local slope/intensity changes but noise-sensitive. Raw magnitude is the default so response amplitudes remain comparable; display normalization is handled separately.
 - **Laplacian**: signed and absolute second derivative; highlights narrow changes and noise.
 - **Difference of Gaussians**: band-pass/high-pass residual at two configurable scales.
 - **Local Background Residual**: subtracts a smooth Gaussian background.
-- **Structure Tensor**: dominant local orientation, coherence, eigenvalue anisotropy, and orientation residual. Orientation is pi-periodic and smoothing uses `cos(2 theta)` / `sin(2 theta)`.
-- **Gabor Filter Bank**: maximum frequency/orientation response and dominant orientation; downscaling is recommended for large images.
+- **Structure Tensor**: dominant local orientation, coherence, eigenvalue anisotropy, and orientation residual. The primary output is selectable; `orientation_residual` is intended for direct defect-enhancement experiments. Orientation is pi-periodic and smoothing uses `cos(2 theta)` / `sin(2 theta)`.
+- **Gabor Filter Bank**: maximum frequency/orientation response, dominant orientation, first-period response, and orientation residual. The primary output is selectable. Its internal scale keeps configured period/sigma semantics consistent while reducing compute cost.
 - **Directional Residual**: experimental discretized oriented-line background approximation, not a reproduction of a proprietary method.
 
 ## Multi frame

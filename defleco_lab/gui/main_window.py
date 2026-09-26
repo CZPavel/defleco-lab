@@ -523,7 +523,9 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         stride = self.stride.value()
         parameters = self.params.values()
-        parameters["stride"] = stride
+        info = next(item for item in registry.infos() if item.id == mid)
+        if "stride" in info.parameters:
+            parameters["stride"] = stride
         method = registry.create(mid, **parameters)
         needed = method.history_requirement()
         if not self.replay and needed > self.LIVE_HISTORY_CAPACITY:
@@ -831,7 +833,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.compare_left.set_array(packet.image)
         mid = self.method_combo.currentData()
         parameters = self.params.values()
-        parameters["stride"] = self.stride.value()
+        if mid:
+            info = next(item for item in registry.infos() if item.id == mid)
+            if "stride" in info.parameters:
+                parameters["stride"] = self.stride.value()
         needed = registry.create(mid, **parameters).history_requirement() if mid else 1
         reconstructed = replay_history(self.replay, self.replay_index, needed)
         if not reconstructed:
