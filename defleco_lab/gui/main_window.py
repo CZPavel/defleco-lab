@@ -321,6 +321,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.stride.setValue(int(p.get("frame_stride", 1)))
         self.scale.setCurrentText(f"{int(p.get('processing_scale', 1) * 100)}%")
         self.comp.setChecked(bool(p.get("motion_compensation", False)))
+        if "motion_mode" in p:
+            self.motion_mode.setCurrentText(str(p["motion_mode"]))
+        if "axis" in p:
+            self.motion_axis.setCurrentText(str(p["axis"]))
         self.params.set_values(p.get("parameters", {}))
         self._process()
 
@@ -523,7 +527,9 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         stride = self.stride.value()
         parameters = self.params.values()
-        parameters["stride"] = stride
+        info = next(item for item in registry.infos() if item.id == mid)
+        if "stride" in info.parameters:
+            parameters["stride"] = stride
         method = registry.create(mid, **parameters)
         needed = method.history_requirement()
         if not self.replay and needed > self.LIVE_HISTORY_CAPACITY:
