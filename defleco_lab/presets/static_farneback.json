@@ -1,1 +1,1 @@
-{"name":"Static Dynamic Pattern - Farneback","method":"farneback","parameters":{"stride":1,"processing_scale":0.5},"frame_stride":1,"processing_scale":0.5,"motion_compensation":false}
+{"name":"Static Dynamic Pattern - Farneback","method":"farneback","parameters":{"output":"local_residual","scale":1.0},"frame_stride":1,"processing_scale":0.5,"motion_compensation":false}
