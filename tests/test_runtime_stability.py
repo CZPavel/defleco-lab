@@ -4,7 +4,7 @@ import numpy as np
 
 from defleco_lab.app import configure_opencv_runtime
 from defleco_lab.camera.basler_source import BaslerSource, CameraDescriptor
-from defleco_lab.processing.single_frame import GaborBank, StructureTensor
+from defleco_lab.processing.single_frame import GaborBank, Gradient, StructureTensor
 from defleco_lab.runtime.acquisition_worker import BaslerAcquisitionWorker
 from defleco_lab.runtime.processing_worker import ProcessingWorker
 
@@ -71,6 +71,10 @@ def test_free_run_state_is_temporary_and_restored(monkeypatch) -> None:
 def test_single_frame_live_path_can_skip_large_intermediate_maps() -> None:
     _y, x = np.mgrid[:96, :128]
     image = (127 + 60 * np.sin(2 * np.pi * x / 12)).astype(np.float32)
+
+    gradient = Gradient().process([image], keep_intermediates=False)
+    assert gradient.primary.shape == image.shape
+    assert not gradient.intermediates
 
     tensor = StructureTensor().process([image], keep_intermediates=False)
     assert tensor.primary.shape == image.shape
