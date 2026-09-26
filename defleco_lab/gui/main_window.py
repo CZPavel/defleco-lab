@@ -514,6 +514,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.camera_metrics = dict(metrics)
         if self.source_combo.currentText() == "Basler":
             self.received_fps = float(metrics.get("received_fps", 0.0))
+        if self.tabs.currentIndex() == 0:
+            self._show_original_metrics()
 
     def _process(self) -> None:
         mid = self.method_combo.currentData() if hasattr(self, "method_combo") else None
@@ -637,6 +639,13 @@ class MainWindow(QtWidgets.QMainWindow):
             f"{recorder_state}{roi_summary}"
         )
 
+    def _show_original_metrics(self) -> None:
+        self.metrics.setText(
+            f"{self.source_combo.currentText()} {self.received_fps:.1f} FPS"
+            " | Original view | Processing idle"
+            f" | Cam-buffer drops {int(self.camera_metrics.get('buffer_drops', 0))}"
+        )
+
     @QtCore.Slot(object)
     def _visualization_changed(self, settings: VisualizationSettings) -> None:
         self.visualization_settings = settings
@@ -647,6 +656,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if index == 0:
             if self.last_original is not None:
                 self.original.set_array(self.last_original)
+            self._show_original_metrics()
             return
 
         # Original is deliberately a camera/recording baseline. Processing starts
