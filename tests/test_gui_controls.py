@@ -161,3 +161,20 @@ def test_original_tab_does_not_submit_processing(monkeypatch) -> None:
 
     window.close()
     app.processEvents()
+
+
+def test_mono8_overlay_preserves_native_brightness():
+    original = np.array([[10, 20], [30, 40]], np.uint8)
+    response = np.zeros((2, 2), np.float32)
+    transform = VisualizationTransform()
+    settings = VisualizationSettings(
+        range_mode=RangeMode.MANUAL,
+        manual_minimum=0.0,
+        manual_maximum=1.0,
+        heatmap=False,
+        overlay_alpha=0.0,
+    )
+    rendered = transform.render(response, settings, original=original)
+    assert np.array_equal(rendered.image[..., 0], original)
+    assert np.array_equal(rendered.image[..., 1], original)
+    assert np.array_equal(rendered.image[..., 2], original)

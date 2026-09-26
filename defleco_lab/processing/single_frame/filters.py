@@ -4,7 +4,7 @@ import cv2
 import numpy as np
 
 from ..base import MethodInfo, ProcessingMethod, ProcessingResult
-from ..preprocessing import gray32, normalize_map
+from ..preprocessing import gray32
 
 
 def _blur(a, sigma):
@@ -18,14 +18,15 @@ class Gradient(ProcessingMethod):
         "Single frame",
         1,
         False,
-        "Spatial intensity derivatives.",
+        "Spatial intensity derivatives. Raw responses are kept quantitative; display scaling is handled by the viewer.",
         parameters={
             "operator": {"default": "scharr", "choices": ["sobel", "scharr"]},
             "sigma": {"default": 0.8, "minimum": 0.0, "maximum": 100.0, "step": 0.1, "units": "px"},
             "ksize": {"default": 3, "minimum": 1, "maximum": 31, "step": 2},
-            "normalize": {
-                "default": True,
-                "tooltip": "Normalize magnitude to a display-friendly map.",
+            "output": {
+                "default": "magnitude",
+                "choices": ["magnitude", "gradient_x", "gradient_y"],
+                "tooltip": "Select the numerical response map. Display normalization is separate.",
             },
         },
     )
@@ -34,18 +35,18 @@ class Gradient(ProcessingMethod):
         a = _blur(gray32(frames[-1]), self.parameters["sigma"])
         op = self.parameters["operator"]
         if op == "scharr":
-            gx, gy = cv2.Scharr(a, cv2.CV_32F, 1, 0), cv2.Scharr(a, cv2.CV_32F, 0, 1)
+            gx = cv2.Scharr(a, cv2.CV_32F, 1, 0)
+            gy = cv2.Scharr(a, cv2.CV_32F, 0, 1)
         else:
-            gx, gy = (
-                cv2.Sobel(a, cv2.CV_32F, 1, 0, ksize=int(self.parameters["ksize"])),
-                cv2.Sobel(a, cv2.CV_32F, 0, 1, ksize=int(self.parameters["ksize"])),
-            )
+            ksize = int(self.parameters["ksize"])
+            gx = cv2.Sobel(a, cv2.CV_32F, 1, 0, ksize=ksize)
+            gy = cv2.Sobel(a, cv2.CV_32F, 0, 1, ksize=ksize)
         mag = cv2.magnitude(gx, gy)
-        primary = normalize_map(mag) if self.parameters["normalize"] else mag
+        maps = {"magnitude": mag, "gradient_x": gx, "gradient_y": gy}
+        primary = maps[self.parameters["output"]]
         if not context.get("keep_intermediates", True):
             return ProcessingResult(primary)
-        return ProcessingResult(primary, {"gradient_x": gx, "gradient_y": gy, "magnitude": mag})
-
+        return ProcessingResult(primary, maps)
 
 class Laplacian(ProcessingMethod):
     info = MethodInfo(
@@ -138,7 +139,8 @@ class StructureTensor(ProcessingMethod):
         "Single frame",
         1,
         False,
-        "Local orientation and anisotropy using pi-periodic double-angle smoothing.",
+        "Local fringe orientation, coherence and orientation disturbance using pi-periodic double-angle smoothing.",
+        recommended_use="Static reflected stripes/fringes; orientation_residual is the most defect-oriented starting output.",
         parameters={
             "operator": {"default": "scharr", "choices": ["sobel", "scharr"]},
             "derivative_sigma": {
@@ -162,45 +164,74 @@ class StructureTensor(ProcessingMethod):
                 "step": 0.5,
                 "units": "px",
             },
+            "output": {
+                "default": "orientation_residual",
+                "choices": ["orientation_residual", "coherence", "anisotropy", "orientation"],
+            },
         },
     )
 
     def _process(self, frames, **context):
         a = _blur(gray32(frames[-1]), self.parameters["derivative_sigma"])
         if self.parameters["operator"] == "scharr":
-            gx, gy = cv2.Scharr(a, cv2.CV_32F, 1, 0), cv2.Scharr(a, cv2.CV_32F, 0, 1)
+            gx = cv2.Scharr(a, cv2.CV_32F, 1, 0)
+            gy = cv2.Scharr(a, cv2.CV_32F, 0, 1)
         else:
-            gx, gy = (
-                cv2.Sobel(a, cv2.CV_32F, 1, 0, ksize=3),
-                cv2.Sobel(a, cv2.CV_32F, 0, 1, ksize=3),
-            )
-        s = float(self.parameters["tensor_sigma"])
-        jxx, jyy, jxy = _blur(gx * gx, s), _blur(gy * gy, s), _blur(gx * gy, s)
-        root = np.sqrt((jxx - jyy) ** 2 + 4 * jxy * jxy)
-        coherence = (root / (jxx + jyy + 1e-6)).astype(np.float32)
-        if not context.get("keep_intermediates", True):
-            return ProcessingResult(coherence)
+            gx = cv2.Sobel(a, cv2.CV_32F, 1, 0, ksize=3)
+            gy = cv2.Sobel(a, cv2.CV_32F, 0, 1, ksize=3)
 
-        l1 = (jxx + jyy + root) / 2
-        l2 = (jxx + jyy - root) / 2
-        theta = (0.5 * np.arctan2(2 * jxy, jxx - jyy)).astype(np.float32)
-        os = float(self.parameters["orientation_smooth_sigma"])
-        c = _blur(np.cos(2 * theta) * coherence, os)
-        ss = _blur(np.sin(2 * theta) * coherence, os)
-        smooth = 0.5 * np.arctan2(ss, c)
-        residual = 0.5 * np.arctan2(np.sin(2 * (theta - smooth)), np.cos(2 * (theta - smooth)))
+        sigma = float(self.parameters["tensor_sigma"])
+        jxx = _blur(gx * gx, sigma)
+        jyy = _blur(gy * gy, sigma)
+        jxy = _blur(gx * gy, sigma)
+        root = np.sqrt((jxx - jyy) ** 2 + 4 * jxy * jxy).astype(np.float32)
+        coherence = (root / (jxx + jyy + 1e-6)).astype(np.float32)
+
+        output = self.parameters["output"]
+        need_orientation = output in {"orientation", "orientation_residual"} or context.get(
+            "keep_intermediates", True
+        )
+        theta = None
+        residual = None
+        if need_orientation:
+            theta = (0.5 * np.arctan2(2 * jxy, jxx - jyy)).astype(np.float32)
+            smooth_sigma = float(self.parameters["orientation_smooth_sigma"])
+            cos2 = _blur(np.cos(2 * theta) * coherence, smooth_sigma)
+            sin2 = _blur(np.sin(2 * theta) * coherence, smooth_sigma)
+            smooth = 0.5 * np.arctan2(sin2, cos2)
+            residual = np.abs(
+                0.5
+                * np.arctan2(
+                    np.sin(2 * (theta - smooth)),
+                    np.cos(2 * (theta - smooth)),
+                )
+            ).astype(np.float32)
+
+        primary_map = {
+            "coherence": coherence,
+            "anisotropy": root,
+            "orientation": theta,
+            "orientation_residual": residual,
+        }[output]
+        assert primary_map is not None
+
+        if not context.get("keep_intermediates", True):
+            return ProcessingResult(primary_map)
+
+        l1 = ((jxx + jyy + root) / 2).astype(np.float32)
+        l2 = ((jxx + jyy - root) / 2).astype(np.float32)
+        assert theta is not None and residual is not None
         return ProcessingResult(
-            coherence,
+            primary_map,
             {
-                "orientation": theta,
+                "orientation_residual": residual,
                 "coherence": coherence,
+                "anisotropy": root,
+                "orientation": theta,
                 "lambda1": l1,
                 "lambda2": l2,
-                "anisotropy": root,
-                "orientation_residual": np.abs(residual),
             },
         )
-
 
 class GaborBank(ProcessingMethod):
     info = MethodInfo(
@@ -209,7 +240,8 @@ class GaborBank(ProcessingMethod):
         "Single frame",
         1,
         False,
-        "Oriented frequency-selective filter bank.",
+        "Oriented frequency-selective filter bank for reflected fringe structures.",
+        recommended_use="Static stripes/fringes; compare maximum_response and orientation_residual.",
         parameters={
             "periods": {"default": [12.0], "type": "list", "item_type": "float", "units": "px"},
             "orientations": {"default": 8, "minimum": 1, "maximum": 64},
@@ -223,7 +255,22 @@ class GaborBank(ProcessingMethod):
                 "decimals": 4,
                 "units": "rad",
             },
-            "scale": {"default": 1.0, "minimum": 0.1, "maximum": 1.0, "step": 0.1},
+            "scale": {
+                "default": 1.0,
+                "minimum": 0.1,
+                "maximum": 1.0,
+                "step": 0.1,
+                "tooltip": "Optional additional internal Gabor downscale. Prefer the global Processing scale first.",
+            },
+            "output": {
+                "default": "maximum_response",
+                "choices": [
+                    "maximum_response",
+                    "orientation_residual",
+                    "dominant_orientation",
+                    "selected_frequency_response",
+                ],
+            },
         },
     )
 
@@ -238,25 +285,34 @@ class GaborBank(ProcessingMethod):
         periods = self.parameters["periods"]
         periods = [periods] if np.isscalar(periods) else list(periods)
         n = int(self.parameters["orientations"])
-        keep_intermediates = context.get("keep_intermediates", True)
+        output = self.parameters["output"]
+        keep = context.get("keep_intermediates", True)
+        need_orientation = keep or output in {"orientation_residual", "dominant_orientation"}
+        need_selected = keep or output == "selected_frequency_response"
 
         maximum = np.full(a.shape, -np.inf, np.float32)
-        orientation = np.zeros(a.shape, np.float32) if keep_intermediates else None
-        selected = np.full(a.shape, -np.inf, np.float32) if keep_intermediates else None
+        orientation = np.zeros(a.shape, np.float32) if need_orientation else None
+        selected = np.full(a.shape, -np.inf, np.float32) if need_selected else None
 
-        for period_index, p in enumerate(periods):
+        sigma = max(0.1, float(self.parameters["sigma"]) * scale)
+        kernel_size = max(7, round(sigma * 6) | 1)
+        for period_index, period in enumerate(periods):
+            wavelength = max(1.0, float(period) * scale)
             for theta in np.linspace(0, np.pi, n, endpoint=False):
-                k = max(7, round(float(self.parameters["sigma"]) * 6) | 1)
                 common = (
-                    (k, k),
-                    float(self.parameters["sigma"]),
+                    (kernel_size, kernel_size),
+                    sigma,
                     float(theta),
-                    float(p) * scale,
+                    wavelength,
                     float(self.parameters["gamma"]),
                 )
-                kr = cv2.getGaborKernel(*common, float(self.parameters["psi"]), ktype=cv2.CV_32F)
+                kr = cv2.getGaborKernel(
+                    *common, float(self.parameters["psi"]), ktype=cv2.CV_32F
+                )
                 ki = cv2.getGaborKernel(
-                    *common, float(self.parameters["psi"]) + np.pi / 2, ktype=cv2.CV_32F
+                    *common,
+                    float(self.parameters["psi"]) + np.pi / 2,
+                    ktype=cv2.CV_32F,
                 )
                 kr -= kr.mean()
                 ki -= ki.mean()
@@ -273,34 +329,52 @@ class GaborBank(ProcessingMethod):
                 if selected is not None and period_index == 0:
                     np.maximum(selected, response, out=selected)
 
-        if scale != 1:
-            maximum = cv2.resize(maximum, (src.shape[1], src.shape[0]))
-        if not keep_intermediates:
-            return ProcessingResult(maximum)
-
-        assert orientation is not None and selected is not None
-        if scale != 1:
-            orientation = cv2.resize(
-                orientation, (src.shape[1], src.shape[0]), interpolation=cv2.INTER_NEAREST
+        residual = None
+        if orientation is not None:
+            smooth_sigma = max(0.1, 8.0 * scale)
+            smooth = 0.5 * np.arctan2(
+                cv2.GaussianBlur(np.sin(2 * orientation), (0, 0), smooth_sigma),
+                cv2.GaussianBlur(np.cos(2 * orientation), (0, 0), smooth_sigma),
             )
-            selected = cv2.resize(selected, (src.shape[1], src.shape[0]))
-        smooth = 0.5 * np.arctan2(
-            cv2.GaussianBlur(np.sin(2 * orientation), (0, 0), 8),
-            cv2.GaussianBlur(np.cos(2 * orientation), (0, 0), 8),
-        )
-        residual = 0.5 * np.arctan2(
-            np.sin(2 * (orientation - smooth)), np.cos(2 * (orientation - smooth))
-        )
+            residual = np.abs(
+                0.5
+                * np.arctan2(
+                    np.sin(2 * (orientation - smooth)),
+                    np.cos(2 * (orientation - smooth)),
+                )
+            ).astype(np.float32)
+
+        if scale != 1:
+            size = (src.shape[1], src.shape[0])
+            maximum = cv2.resize(maximum, size)
+            if orientation is not None:
+                orientation = cv2.resize(orientation, size, interpolation=cv2.INTER_NEAREST)
+            if selected is not None:
+                selected = cv2.resize(selected, size)
+            if residual is not None:
+                residual = cv2.resize(residual, size)
+
+        outputs = {
+            "maximum_response": maximum,
+            "orientation_residual": residual,
+            "dominant_orientation": orientation,
+            "selected_frequency_response": selected,
+        }
+        primary = outputs[output]
+        assert primary is not None
+        if not keep:
+            return ProcessingResult(primary)
+
+        assert orientation is not None and selected is not None and residual is not None
         return ProcessingResult(
-            maximum,
+            primary,
             {
                 "maximum_response": maximum,
+                "orientation_residual": residual,
                 "dominant_orientation": orientation,
                 "selected_frequency_response": selected,
-                "orientation_residual": np.abs(residual),
             },
         )
-
 
 class DirectionalResidual(ProcessingMethod):
     info = MethodInfo(

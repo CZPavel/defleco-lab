@@ -206,6 +206,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.stride.setRange(1, 16)
         self.scale = QtWidgets.QComboBox()
         self.scale.addItems(["100%", "50%", "25%"])
+        self.scale.setToolTip(
+            "Downscales frames before processing. Method parameters expressed in px "
+            "refer to the processed image grid, so keep scale fixed when comparing "
+            "parameter values across pattern experiments."
+        )
         self.comp = QtWidgets.QCheckBox("Enable one-axis compensation")
         self.analysis_only = QtWidgets.QCheckBox("Process enabled Analysis ROIs only")
         self.motion_axis = QtWidgets.QComboBox()
@@ -321,6 +326,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.stride.setValue(int(p.get("frame_stride", 1)))
         self.scale.setCurrentText(f"{int(p.get('processing_scale', 1) * 100)}%")
         self.comp.setChecked(bool(p.get("motion_compensation", False)))
+        if "motion_mode" in p:
+            self.motion_mode.setCurrentText(str(p["motion_mode"]))
+        if "axis" in p:
+            self.motion_axis.setCurrentText(str(p["axis"]))
         self.params.set_values(p.get("parameters", {}))
         self._process()
 
@@ -523,7 +532,9 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         stride = self.stride.value()
         parameters = self.params.values()
-        parameters["stride"] = stride
+        info = next(item for item in registry.infos() if item.id == mid)
+        if "stride" in info.parameters:
+            parameters["stride"] = stride
         method = registry.create(mid, **parameters)
         needed = method.history_requirement()
         if not self.replay and needed > self.LIVE_HISTORY_CAPACITY:
@@ -831,7 +842,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.compare_left.set_array(packet.image)
         mid = self.method_combo.currentData()
         parameters = self.params.values()
-        parameters["stride"] = self.stride.value()
+        if mid:
+            info = next(item for item in registry.infos() if item.id == mid)
+            if "stride" in info.parameters:
+                parameters["stride"] = self.stride.value()
         needed = registry.create(mid, **parameters).history_requirement() if mid else 1
         reconstructed = replay_history(self.replay, self.replay_index, needed)
         if not reconstructed:

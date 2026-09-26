@@ -1,1 +1,1 @@
-{"name":"Fringes - Gabor","method":"gabor","parameters":{"periods":[16,32],"orientations":8,"sigma":6.0,"gamma":0.5},"frame_stride":1,"processing_scale":0.5,"motion_compensation":false}
+{"name":"Fringes - Gabor","method":"gabor","parameters":{"periods":[16,32],"orientations":8,"sigma":6.0,"gamma":0.5,"psi":0.0,"scale":1.0,"output":"orientation_residual"},"frame_stride":1,"processing_scale":0.5,"motion_compensation":false}
