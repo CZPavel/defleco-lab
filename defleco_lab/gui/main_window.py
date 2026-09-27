@@ -492,6 +492,16 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def closeEvent(self, event):
         self._stop_experiment()
+        worker = self._experiment_processing_worker
+        if worker is not None and worker.isRunning():
+            worker.cancel()
+            if not worker.wait(30000):
+                self.statusBar().showMessage(
+                    "Offline screening worker did not stop; close postponed"
+                )
+                event.ignore()
+                return
+            self._experiment_processing_worker = None
         self.pattern_output.shutdown()
         if not self._stop():
             self.statusBar().showMessage(
