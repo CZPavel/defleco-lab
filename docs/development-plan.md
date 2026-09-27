@@ -78,7 +78,7 @@ alpha overlays are for a human observer only.
 - [~] continuous rotation/phase mode;
 - [ ] physical verification on the actual 4K display;
 - [ ] verify Windows multi-monitor full-screen placement on the target PC;
-- [ ] measure/record display refresh timing;
+- [~] record OS-reported display refresh rate and per-case pattern-to-capture delay; true VSync/photodiode timing measurement remains pending;
 - [ ] optional photodiode/sync patch if timing uncertainty later matters.
 
 ### Pattern-generator source continuity
