@@ -74,6 +74,39 @@ def build_pattern_cases(profile: str = "quick") -> list[PatternCase]:
         cases.extend(_angle_group("checker", period, checker_angles))
         cases.extend(_angle_group("spiral", period, spiral_angles))
         cases.extend(_phase_group("rings", period, ring_phases))
+
+    if profile == "extended":
+        # Reuse additional families from the standalone V02 generator, but keep
+        # their sweep intentionally smaller than the four primary families.
+        extra_periods = [20.0, 32.0]
+        extra_angles = [0.0, 15.0, 30.0, 45.0]
+        for period in extra_periods:
+            for family in ("composite", "nested_square", "squircle", "counter_spiral"):
+                cases.extend(_angle_group(family, period, extra_angles))
+        cases.extend(
+            [
+                PatternCase(
+                    case_id=f"starburst_s18_a{_number(angle)}",
+                    group_id="starburst_s18",
+                    sequence_index=index,
+                    settings=PatternSettings(
+                        family="starburst",
+                        angle_deg=angle,
+                        spokes=18,
+                        mode="step",
+                    ),
+                )
+                for index, angle in enumerate((0.0, 10.0, 20.0, 30.0))
+            ]
+        )
+        cases.append(
+            PatternCase(
+                case_id="solid_reference",
+                group_id="solid_reference",
+                sequence_index=0,
+                settings=PatternSettings(family="solid", mode="static"),
+            )
+        )
     return cases
 
 
