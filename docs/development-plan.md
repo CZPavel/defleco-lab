@@ -43,6 +43,58 @@ The analysis path is deliberately split into four layers:
 The display layer must never be fed back into numerical processing. Colour maps and
 alpha overlays are for a human observer only.
 
+## Reliability review 2026-09-28
+
+This review did not add analysis methods or pattern families. It inspected the
+current acquisition, bounded buffers, processing worker, screening capture,
+recording/session I/O and shutdown lifecycle.
+
+Corrections made during the review:
+
+- [x] a new Basler live run clears stale history from the previous source/session,
+      so initial multi-frame processing cannot mix old and new frame sequences;
+- [x] source/session switching now aborts if the previous camera worker did not
+      stop cleanly instead of continuing into a second source state;
+- [x] screening capture now accepts only a camera packet whose host acquisition
+      timestamp is newer than the requested pattern settling interval, not merely a
+      different frame id;
+- [x] screening and session manifests/metadata are replaced atomically to reduce
+      corruption risk if writing is interrupted;
+- [x] recorder queues stop accepting/copying new frames after the writer thread has
+      already failed;
+- [x] repeated Record presses no longer orphan an existing recorder;
+- [x] application close waits for an active offline screening worker to stop before
+      destroying the window/thread hierarchy;
+- [x] a failed current processing request clears the previous response rather than
+      leaving a stale result visible;
+- [x] processing failures from an invalidated/old generation are no longer reported
+      into a newly started source/session.
+
+Buffer/lifecycle conclusions:
+
+- Basler delivery is bounded by a 16-frame acquisition mailbox.
+- Live analysis history is bounded to 64 frame references.
+- Processing has one latest-wins pending request and one latest completed result;
+  stale work/results are dropped rather than queued without limit.
+- The raw recorder uses a bounded 64-item queue and performs disk I/O off the
+  acquisition/GUI thread.
+- Display rendering is independently capped/downscaled and does not enlarge the
+  numerical processing history.
+
+Known residual risks to validate physically rather than redesign speculatively:
+
+- [ ] continuous 4K pattern animation still renders on the Qt GUI thread; the
+      half-resolution default and acquisition mailbox should protect the ~6 FPS
+      camera use case, but responsiveness must be checked on the actual display PC;
+- [ ] long raw recording can eventually become metadata-I/O bound because the
+      recoverable CSV metadata file is rewritten as the session grows; current
+      short PoC recordings are the intended use;
+- [ ] Quick/Extended screening can produce substantial disk volume because numeric
+      float response maps are intentionally preserved for later analysis;
+- [ ] host receive timestamps improve stepped-pattern freshness but are not a
+      hardware display/camera phase measurement; VSync/photodiode timing remains a
+      later option only if experiments show it matters.
+
 ## Implemented foundation
 
 ### Acquisition and replay
