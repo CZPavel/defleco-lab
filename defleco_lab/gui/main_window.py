@@ -43,6 +43,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.replay_index = 0
         self.recorder: AsyncSessionRecorder | None = None
         self.camera_worker: BaslerAcquisitionWorker | None = None
+        self._camera_error_active = False
+        self._camera_error_message = ""
         self.last_result = None
         self.last_original: np.ndarray | None = None
         self.last_motion_mask: np.ndarray | None = None
@@ -426,7 +428,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _start(self):
         selected_source = self.source_combo.currentText()
-        self._stop()
+        # Never replace a worker that failed to stop. Doing so can leave the old
+        # InstantCamera alive while a second worker tries to open the same device.
+        if not self._stop():
+            return
         self.compare_reference = None
         self.compare_reference_mask = None
         self.visualization_transform.reset_range()
@@ -436,22 +441,34 @@ class MainWindow(QtWidgets.QMainWindow):
             self.history.clear()
         if selected_source == "Basler":
             self.replay = []
+            # A new camera connection is a new temporal sequence. Never mix frames
+            # from the previous worker with a fresh frame-id sequence.
+            self.history.clear()
+            self.last_original = None
+            self.last_result = None
+            self._clear_processed_views()
+            self.original.clear_image()
             descriptor = self.camera_combo.currentData()
             if descriptor is None:
                 self.statusBar().showMessage("Discover and explicitly select a camera first")
                 return
+            self._camera_error_active = False
+            self._camera_error_message = ""
             # Camera parameters are intentionally configured in pylon Viewer.
             # Defleco LAB only owns acquisition for the experiment.
-            self.camera_worker = BaslerAcquisitionWorker(descriptor, {}, self)
-            self.camera_worker.failed.connect(self._camera_failed)
-            self.camera_worker.metricsReady.connect(self._camera_metrics)
-            self.camera_worker.restoreReport.connect(self._camera_restored)
-            self.camera_worker.applyReport.connect(
+            worker = BaslerAcquisitionWorker(descriptor, {}, self)
+            self.camera_worker = worker
+            worker.failed.connect(self._camera_failed)
+            worker.metricsReady.connect(self._camera_metrics)
+            worker.restoreReport.connect(self._camera_restored)
+            worker.applyReport.connect(
                 lambda report: self.statusBar().showMessage(f"Temporary camera readback: {report}")
             )
-            self.camera_worker.start()
+            worker.finished.connect(self._camera_worker_finished)
+            worker.start()
             self.camera_timer.start()
-            self.state_label.setText("LIVE")
+            self.state_label.setText("CONNECTING")
+            self.statusBar().showMessage("Opening Basler camera and waiting for frames...")
             return
         if selected_source == "Recorded Session":
             self.replay = []
@@ -480,11 +497,14 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.camera_worker is not None:
             worker = self.camera_worker
             if worker.stop():
-                self.camera_worker = None
+                if self.camera_worker is worker:
+                    self.camera_worker = None
+                worker.deleteLater()
             else:
                 self.state_label.setText("ERROR")
                 self.statusBar().showMessage(
-                    "Camera worker did not stop within 5 s; camera state restoration is not confirmed"
+                    "Camera worker did not stop within 5 s; reconnect blocked to avoid "
+                    "opening the same device twice"
                 )
                 return False
         self.state_label.setText("FROZEN")
@@ -754,6 +774,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.recorder.append(packet)
         latest = packets[-1]
         self.last_original = latest.image
+        if not self._camera_error_active:
+            self.state_label.setText("LIVE")
         if self.tabs.currentIndex() == 0:
             self.original.set_array(latest.image)
         else:
@@ -805,8 +827,14 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _camera_restored(self, failures: list[str]) -> None:
         if failures:
+            prefix = "Camera error cleanup warning" if self._camera_error_active else (
+                "Temporary camera settings restore warning"
+            )
+            self.statusBar().showMessage(prefix + ": " + "; ".join(failures))
+        elif self._camera_error_active:
+            detail = self._camera_error_message or "acquisition error"
             self.statusBar().showMessage(
-                "Temporary camera settings restore warning: " + "; ".join(failures)
+                f"Camera: {detail} | camera handle released; press Live to reconnect"
             )
         else:
             self.statusBar().showMessage(
@@ -815,8 +843,28 @@ class MainWindow(QtWidgets.QMainWindow):
 
     @QtCore.Slot(str)
     def _camera_failed(self, message: str) -> None:
+        self._camera_error_active = True
+        self._camera_error_message = message
+        self.camera_timer.stop()
         self.state_label.setText("ERROR")
-        self.statusBar().showMessage(f"Camera: {message}")
+        self.statusBar().showMessage(
+            f"Camera: {message} | cleaning up connection before reconnect"
+        )
+
+    @QtCore.Slot()
+    def _camera_worker_finished(self) -> None:
+        worker = self.sender()
+        if worker is self.camera_worker:
+            self.camera_timer.stop()
+            self.camera_worker = None
+            if self._camera_error_active:
+                self.state_label.setText("ERROR")
+                detail = self._camera_error_message or "acquisition error"
+                self.statusBar().showMessage(
+                    f"Camera: {detail} | connection closed; press Live to reconnect"
+                )
+        if isinstance(worker, QtCore.QObject):
+            worker.deleteLater()
 
     @QtCore.Slot(object)
     def _camera_metrics(self, metrics: dict[str, float | int]) -> None:
@@ -827,6 +875,8 @@ class MainWindow(QtWidgets.QMainWindow):
             label = descriptor.label if descriptor is not None else "Basler"
             self.camera_status.setText(
                 f"{label}\nAcquisition: {self.received_fps:.2f} FPS | "
+                f"frame age: {float(metrics.get('last_frame_age_s', 0.0)):.2f} s | "
+                f"timeouts: {int(metrics.get('timeouts', 0))} | "
                 f"buffer drops: {int(metrics.get('buffer_drops', 0))}\n"
                 "Camera parameters are managed in pylon Viewer."
             )
