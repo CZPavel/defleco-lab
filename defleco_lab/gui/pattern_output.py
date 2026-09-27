@@ -417,11 +417,16 @@ class PatternControlPanel(QtWidgets.QGroupBox):
         continuous = mode == "continuous"
         stepped = mode == "step"
         self.speed.setVisible(continuous)
+        self.animation_fps.setVisible(continuous)
         self.step_size.setVisible(stepped)
         self.step_button.setVisible(stepped)
         layout = self.layout()
         if isinstance(layout, QtWidgets.QFormLayout):
-            for editor, visible in ((self.speed, continuous), (self.step_size, stepped)):
+            for editor, visible in (
+                (self.speed, continuous),
+                (self.animation_fps, continuous),
+                (self.step_size, stepped),
+            ):
                 label = layout.labelForField(editor)
                 if label is not None:
                     label.setVisible(visible)
