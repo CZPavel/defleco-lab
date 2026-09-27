@@ -43,6 +43,38 @@ The analysis path is deliberately split into four layers:
 The display layer must never be fed back into numerical processing. Colour maps and
 alpha overlays are for a human observer only.
 
+## Reliability review 2026-09-27
+
+Static review of the integrated laboratory workflow focused on acquisition ordering,
+bounded buffers, processing hand-off, screening capture freshness, recorder behaviour
+and clean shutdown. No new analysis features were added.
+
+Findings / actions:
+
+- [x] camera SDK delivery changed from `LatestImageOnly` to `OneByOne`; Defleco's
+      own bounded mailbox now remains the observable place where backlog/drop
+      handling occurs, which is safer for temporal methods and recording;
+- [x] automated screening now waits through the configured pattern-settle interval,
+      establishes a post-settle frame baseline, then requires one strictly newer
+      camera frame before saving a case;
+- [x] recorder drop count is reported when a manual recording is closed;
+- [x] application shutdown now waits for an active offline screening worker instead
+      of allowing a running QThread to be destroyed with the main window;
+- [x] unexpected offline screening exceptions are surfaced to the operator instead
+      of silently terminating the worker;
+- [x] live camera mailbox, live history, processing requests/results and recorder
+      queues remain bounded;
+- [~] current raw-memory bounds are intentionally conservative rather than minimal:
+      64 live frames, 16 camera-mailbox frames and up to 64 recorder copies. At
+      multi-megapixel Mono8 resolution this can consume several hundred MB before
+      method working buffers; physical monitoring on the target PC is still useful;
+- [~] continuous 4K pattern animation remains GUI-thread rendered. The default 50%
+      render scale reduces load, but physical testing should watch GUI responsiveness
+      and camera-buffer drops during continuous patterns;
+- [ ] do not tune buffer sizes or further optimise pattern rendering without evidence
+      from the target workstation; the existing bounds are safe enough for the
+      current ~6 FPS PoC and preserve useful temporal history.
+
 ## Implemented foundation
 
 ### Acquisition and replay
