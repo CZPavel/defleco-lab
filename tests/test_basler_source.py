@@ -78,3 +78,24 @@ def test_auto_exposure_restore_does_not_replay_stale_runtime_exposure(monkeypatc
     # ExposureTime is the runtime output of AE in this baseline and must not be
     # forced back to the previously observed 5 s value.
     assert exposure.Value == 12000.0
+
+
+def test_close_releases_source_reference_even_when_transport_state_raises() -> None:
+    descriptor = CameraDescriptor("MODEL", "", "BaslerGigE", serial="hidden")
+    source = BaslerSource(descriptor)
+
+    class BrokenCamera:
+        def IsGrabbing(self):
+            raise RuntimeError("transport lost")
+
+        def IsOpen(self):
+            raise RuntimeError("device unreachable")
+
+    source.camera = BrokenCamera()
+    failures = source.close()
+
+    assert source.camera is None
+    assert source._baseline == {}
+    assert source._free_run_baseline == {}
+    assert any("StopGrabbing" in item for item in failures)
+    assert any("Camera close" in item for item in failures)
