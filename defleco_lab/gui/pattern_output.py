@@ -300,6 +300,10 @@ class PatternControlPanel(QtWidgets.QGroupBox):
             "Physical reference pattern reflected by the painted surface. "
             "The names describe the generated pattern, not an analysis method."
         )
+        self.pattern_hint = QtWidgets.QLabel()
+        self.pattern_hint.setWordWrap(True)
+        self.pattern_hint.setStyleSheet("color: #aeb6bf;")
+        form.addRow(self.pattern_hint)
 
         self.period = QtWidgets.QDoubleSpinBox()
         self.period.setRange(4.0, 500.0)
@@ -549,6 +553,20 @@ class PatternControlPanel(QtWidgets.QGroupBox):
 
     def _update_context(self) -> None:
         family = str(self.family.currentData())
+        hints = {
+            "stripes": "Directional baseline. Fine stripes + rotation were visually strong in the first car test.",
+            "checker": "Two-direction grid. Useful when local line mixing or corner distortion is of interest.",
+            "rings": "Radial fringes. Phase stepping expands/contracts the rings without rotating them.",
+            "composite": "Combined X/Y carrier for a single-frame two-direction baseline.",
+            "nested_square": "Concentric square fringes from the standalone V02 generator.",
+            "squircle": "Superellipse between rings and squares; power 2 is circular.",
+            "spiral": "Archimedean-style line spiral. One fine arm is the current recommended starting point.",
+            "counter_spiral": "Opposite-handed spiral pair; more complex, intended for comparison rather than default use.",
+            "starburst": "Alternating radial sectors; tests angular disturbance sensitivity.",
+            "speckle": "Repeatable pseudo-random texture for future optical-flow/DIC-oriented experiments.",
+            "solid": "Uniform field for illumination/reference checks; no dynamic structure.",
+        }
+        self.pattern_hint.setText(hints.get(family, ""))
         mode = str(self.mode.currentData())
         animatable = family not in {"speckle", "solid"}
         continuous = animatable and mode == "continuous"
