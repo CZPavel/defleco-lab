@@ -521,10 +521,11 @@ class MainWindow(QtWidgets.QMainWindow):
             self.experiment.failed("No camera frame is available yet.")
             return
 
-        parent = Path(str(config.get("parent", ""))).expanduser()
-        if not parent:
+        parent_text = str(config.get("parent", "")).strip()
+        if not parent_text:
             self.experiment.failed("Choose an experiment parent folder.")
             return
+        parent = Path(parent_text).expanduser()
         parent.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S_%f")
         root = parent / f"Defleco_screening_{stamp}"
