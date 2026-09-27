@@ -126,7 +126,7 @@ class PreprocessingPanel(QtWidgets.QGroupBox):
         return {"100%": 1.0, "50%": 0.5, "25%": 0.25}[self.scale.currentText()]
 
     def set_processing_scale(self, scale: float) -> None:
-        label = f"{int(round(float(scale) * 100))}%"
+        label = f"{round(float(scale) * 100)}%"
         if self.scale.findText(label) >= 0:
             self.scale.setCurrentText(label)
 
