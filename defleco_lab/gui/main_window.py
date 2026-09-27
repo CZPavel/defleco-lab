@@ -5,7 +5,7 @@ from collections import deque
 from datetime import datetime
 from importlib.resources import files
 from pathlib import Path
-from time import perf_counter
+from time import perf_counter, perf_counter_ns
 
 import cv2
 import numpy as np
@@ -63,6 +63,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._experiment_root: Path | None = None
         self._experiment_baseline_frame_id: int | None = None
         self._experiment_case_started = 0.0
+        self._experiment_not_before_ns: int | None = None
         self._experiment_settle_ms = 250
         self._experiment_auto_process = True
         self._experiment_profile = "quick"
@@ -426,7 +427,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _start(self):
         selected_source = self.source_combo.currentText()
-        self._stop()
+        if not self._stop():
+            return
         self.compare_reference = None
         self.compare_reference_mask = None
         self.visualization_transform.reset_range()
@@ -436,6 +438,17 @@ class MainWindow(QtWidgets.QMainWindow):
             self.history.clear()
         if selected_source == "Basler":
             self.replay = []
+            # A new Basler worker starts its frame_id sequence from zero. Never mix
+            # frames left in history by a previous source/session with the new live stream.
+            self.history.clear()
+            self.last_result = None
+            self.last_original = None
+            self.last_motion_mask = None
+            self._source_times.clear()
+            self._processed_times.clear()
+            self.received_fps = 0.0
+            self.processed_fps = 0.0
+            self.camera_metrics = {}
             descriptor = self.camera_combo.currentData()
             if descriptor is None:
                 self.statusBar().showMessage("Discover and explicitly select a camera first")
@@ -492,6 +505,16 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def closeEvent(self, event):
         self._stop_experiment()
+        screening_worker = self._experiment_processing_worker
+        if screening_worker is not None and screening_worker.isRunning():
+            screening_worker.cancel()
+            if not screening_worker.wait(30000):
+                self.statusBar().showMessage(
+                    "Screening worker did not stop; close postponed to preserve result files"
+                )
+                event.ignore()
+                return
+            self._experiment_processing_worker = None
         self.pattern_output.shutdown()
         if not self._stop():
             self.statusBar().showMessage(
@@ -562,7 +585,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self._experiment_baseline_frame_id = (
             self.history[-1].frame_id if self.history else None
         )
-        self._experiment_case_started = perf_counter()
+        started_ns = perf_counter_ns()
+        self._experiment_case_started = started_ns / 1_000_000_000.0
+        self._experiment_not_before_ns = (
+            started_ns + int(self._experiment_settle_ms) * 1_000_000
+        )
         self.experiment.update_progress(
             self._experiment_index,
             len(self._experiment_cases),
@@ -583,7 +610,14 @@ class MainWindow(QtWidgets.QMainWindow):
             return
 
         packet = self.history[-1]
-        if packet.frame_id == self._experiment_baseline_frame_id:
+        packet_is_stale = (
+            packet.frame_id == self._experiment_baseline_frame_id
+            or (
+                self._experiment_not_before_ns is not None
+                and int(packet.host_timestamp_ns) < self._experiment_not_before_ns
+            )
+        )
+        if packet_is_stale:
             if elapsed_ms > max(5000.0, self._experiment_settle_ms + 3000.0):
                 self.experiment_timer.stop()
                 self.experiment.failed("Timed out waiting for a new camera frame.")
@@ -640,6 +674,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _finish_capture_experiment(self) -> None:
         self.experiment_timer.stop()
+        self._experiment_not_before_ns = None
         self.pattern_output.output.hide_output()
         self._write_capture_manifest(status="captured")
         root = self._experiment_root
@@ -698,6 +733,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _stop_experiment(self) -> None:
         if self.experiment_timer.isActive():
             self.experiment_timer.stop()
+            self._experiment_not_before_ns = None
             self._write_capture_manifest(status="cancelled")
             self.pattern_output.output.hide_output()
             self.experiment.failed("Capture cancelled; already saved RAW cases were preserved.")
@@ -1055,6 +1091,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.statusBar().showMessage("Compare reference stored with a shared display range")
 
     def _record(self):
+        if self.recorder is not None:
+            self.statusBar().showMessage("Recording is already active")
+            return
         root = QtWidgets.QFileDialog.getExistingDirectory(self, "Session root")
         if root:
             self.recorder = AsyncSessionRecorder(Path(root), self.notes.toPlainText())
@@ -1069,7 +1108,8 @@ class MainWindow(QtWidgets.QMainWindow):
     def _load_session(self):
         path = QtWidgets.QFileDialog.getExistingDirectory(self, "Open recorded session")
         if path:
-            self._stop()
+            if not self._stop():
+                return
             self.source_combo.setCurrentText("Recorded Session")
             self.replay = load_session(Path(path))
             self.replay_index = 0
