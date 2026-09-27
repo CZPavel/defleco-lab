@@ -637,11 +637,22 @@ class MainWindow(QtWidgets.QMainWindow):
             index = 0 if screen_index is None else max(0, min(int(screen_index), len(screens) - 1))
             screen = screens[index]
             geometry = screen.geometry()
+            dpr = max(0.1, float(screen.devicePixelRatio()))
+            physical_width = round(geometry.width() * dpr)
+            physical_height = round(geometry.height() * dpr)
             display = {
                 "index": index,
                 "name": screen.name(),
                 "width": geometry.width(),
                 "height": geometry.height(),
+                "logical_width": geometry.width(),
+                "logical_height": geometry.height(),
+                "device_pixel_ratio": round(dpr, 3),
+                "physical_width_estimate": physical_width,
+                "physical_height_estimate": physical_height,
+                "orientation": (
+                    "portrait" if physical_height > physical_width else "landscape"
+                ),
                 "refresh_hz_reported": round(float(screen.refreshRate()), 3),
             }
         payload = {
