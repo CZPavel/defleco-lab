@@ -408,18 +408,39 @@ class BaslerSource:
 
     def close(self) -> list[str]:
         failures: list[str] = []
-        if self.camera is None:
+        camera = self.camera
+        if camera is None:
             return failures
+
+        # Transport/device failures can make IsGrabbing/IsOpen themselves raise.
+        # Cleanup must still clear our camera reference so a later connection gets
+        # a completely fresh InstantCamera/device object.
         try:
-            if self.camera.IsGrabbing():
-                self.camera.StopGrabbing()
-            self._restore_profile(failures)
-            self._restore_free_run(failures)
+            try:
+                if camera.IsGrabbing():
+                    camera.StopGrabbing()
+            except Exception as exc:
+                failures.append(f"StopGrabbing: {exc}")
+
+            try:
+                self._restore_profile(failures)
+            except Exception as exc:
+                failures.append(f"Profile restore: {exc}")
+
+            try:
+                self._restore_free_run(failures)
+            except Exception as exc:
+                failures.append(f"Free-run restore: {exc}")
         finally:
-            if self.camera.IsOpen():
-                self.camera.Close()
-            self.camera = None
-            self._free_run_baseline = {}
+            try:
+                if camera.IsOpen():
+                    camera.Close()
+            except Exception as exc:
+                failures.append(f"Camera close: {exc}")
+            finally:
+                self.camera = None
+                self._baseline = {}
+                self._free_run_baseline = {}
         return failures
 
 
