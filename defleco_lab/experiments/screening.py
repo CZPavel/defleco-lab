@@ -135,17 +135,6 @@ def default_analysis_recipes(profile: str = "quick") -> list[AnalysisRecipe]:
             },
         ),
         AnalysisRecipe(
-            "scharr_vector_residual",
-            "gradient",
-            {
-                "operator": "scharr",
-                "sigma": 0.8,
-                "ksize": 3,
-                "residual_sigma": 8.0,
-                "output": "vector_residual",
-            },
-        ),
-        AnalysisRecipe(
             "tensor_orientation_residual",
             "structure_tensor",
             {
