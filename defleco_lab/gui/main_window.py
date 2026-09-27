@@ -526,7 +526,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.experiment.failed("Choose an experiment parent folder.")
             return
         parent.mkdir(parents=True, exist_ok=True)
-        stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        stamp = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S_%f")
         root = parent / f"Defleco_screening_{stamp}"
         root.mkdir(parents=True, exist_ok=False)
         (root / "raw").mkdir()
@@ -654,6 +654,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._experiment_processing_worker = worker
         worker.progressChanged.connect(self.experiment.update_progress)
         worker.completed.connect(self._experiment_processing_complete)
+        worker.cancelled.connect(self._experiment_processing_cancelled)
         worker.failed.connect(self._experiment_processing_failed)
         worker.start()
 
@@ -661,6 +662,12 @@ class MainWindow(QtWidgets.QMainWindow):
     def _experiment_processing_complete(self, manifest: str) -> None:
         self.experiment.finished(f"Screening results saved: {manifest}")
         self.statusBar().showMessage("Automated screening processing complete")
+        self._experiment_processing_worker = None
+
+    @QtCore.Slot()
+    def _experiment_processing_cancelled(self) -> None:
+        self.experiment.finished("Offline processing cancelled; captured RAW data were preserved.")
+        self.statusBar().showMessage("Screening processing cancelled")
         self._experiment_processing_worker = None
 
     @QtCore.Slot(str)
