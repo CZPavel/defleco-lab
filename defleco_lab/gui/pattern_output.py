@@ -23,44 +23,92 @@ class PatternSettings:
     step_deg: float = 15.0
     render_scale: float = 0.5
     animation_fps: int = 20
+    duty_percent: float = 50.0
+    squircle_power: float = 6.0
+    spiral_arms: int = 1
+    spiral_width_percent: float = 20.0
+    spokes: int = 18
+    speckle_size_px: int = 24
+    seed: int = 12345
 
     def as_dict(self) -> dict:
         return asdict(self)
 
 
 def render_pattern(width: int, height: int, settings: PatternSettings) -> np.ndarray:
-    """Render one deterministic Mono8 pattern frame."""
+    """Render one deterministic Mono8 pattern frame.
+
+    Pattern families and parameter semantics intentionally follow the established
+    standalone GPixel Deflecto dynamic-pattern PoC where practical.
+    """
 
     width = max(2, int(width))
     height = max(2, int(height))
     period = max(2.0, float(settings.period_px))
+    duty = np.clip(float(settings.duty_percent) / 100.0, 0.01, 0.99)
+    phase_cycles = (float(settings.phase_deg) % 360.0) / 360.0
+
     yy, xx = np.mgrid[:height, :width].astype(np.float32)
     x = xx - (width - 1) / 2.0
     y = yy - (height - 1) / 2.0
     angle = math.radians(float(settings.angle_deg))
-    phase = math.radians(float(settings.phase_deg))
-    c, s = math.cos(angle), math.sin(angle)
-    xr = c * x + s * y
-    yr = -s * x + c * y
+    c_angle, s_angle = math.cos(angle), math.sin(angle)
+    xr = c_angle * x + s_angle * y
+    yr = -s_angle * x + c_angle * y
+    radius = np.hypot(x, y)
+    theta = np.arctan2(y, x)
     family = settings.family
 
     if family == "checker":
-        sx = np.sin(np.pi * xr / period)
-        sy = np.sin(np.pi * yr / period)
-        signal = (sx * sy >= 0).astype(np.float32)
+        phase_px = phase_cycles * period
+        ix = np.floor((xr + phase_px) / period).astype(np.int32)
+        iy = np.floor((yr + phase_px) / period).astype(np.int32)
+        signal = ((ix + iy) % 2 == 0).astype(np.float32)
     elif family == "rings":
-        radius = np.hypot(x, y)
-        wave = np.sin(2.0 * np.pi * radius / period + phase)
-        signal = _wave_to_level(wave, settings.waveform)
-    elif family == "spiral":
-        radius = np.hypot(x, y)
-        theta = np.arctan2(y, x) - angle
-        # One-arm Archimedean-like carrier.  The radial period controls fineness.
-        wave = np.sin(2.0 * np.pi * radius / period - theta + phase)
-        signal = _wave_to_level(wave, settings.waveform)
+        cycles = radius / period + phase_cycles
+        signal = _carrier(cycles, settings.waveform, duty)
+    elif family == "composite":
+        x_signal = _carrier(xr / period + phase_cycles, settings.waveform, duty)
+        y_signal = _carrier(yr / period + phase_cycles, settings.waveform, duty)
+        signal = 0.5 * (x_signal + y_signal)
+    elif family == "nested_square":
+        metric = np.maximum(np.abs(xr), np.abs(yr))
+        signal = _line_carrier(metric / period + phase_cycles, duty)
+    elif family == "squircle":
+        power = max(2.0, float(settings.squircle_power))
+        metric = (np.abs(xr) ** power + np.abs(yr) ** power) ** (1.0 / power)
+        signal = _line_carrier(metric / period + phase_cycles, duty)
+    elif family in {"spiral", "counter_spiral"}:
+        arms = max(1, int(settings.spiral_arms))
+        width_fraction = np.clip(
+            float(settings.spiral_width_percent) / 100.0, 0.02, 0.9
+        )
+        spiral_cycles = radius / period - arms * (theta - angle) / (2.0 * np.pi)
+        signal = _line_carrier(spiral_cycles + phase_cycles, width_fraction)
+        if family == "counter_spiral":
+            opposite = radius / period + arms * (theta + angle) / (2.0 * np.pi)
+            signal = np.maximum(
+                signal,
+                _line_carrier(opposite + phase_cycles, width_fraction),
+            )
+    elif family == "starburst":
+        spokes = max(2, int(settings.spokes))
+        sectors = spokes * 2
+        angular = np.mod(theta - angle + phase_cycles * (2.0 * np.pi / sectors), 2.0 * np.pi)
+        sector = np.floor(angular / (2.0 * np.pi / sectors)).astype(np.int32)
+        signal = (sector % 2 == 0).astype(np.float32)
+    elif family == "speckle":
+        block = max(1, int(settings.speckle_size_px))
+        rows = int(np.ceil(height / block))
+        cols = int(np.ceil(width / block))
+        rng = np.random.default_rng(max(0, int(settings.seed)))
+        cells = (rng.random((rows, cols)) >= 0.5).astype(np.float32)
+        signal = np.repeat(np.repeat(cells, block, axis=0), block, axis=1)[:height, :width]
+    elif family == "solid":
+        signal = np.ones((height, width), np.float32)
     else:
-        wave = np.sin(2.0 * np.pi * xr / period + phase)
-        signal = _wave_to_level(wave, settings.waveform)
+        cycles = xr / period + phase_cycles
+        signal = _carrier(cycles, settings.waveform, duty)
 
     if settings.invert:
         signal = 1.0 - signal
@@ -68,10 +116,17 @@ def render_pattern(width: int, height: int, settings: PatternSettings) -> np.nda
     return np.rint(np.clip(signal * peak, 0, 255)).astype(np.uint8)
 
 
-def _wave_to_level(wave: np.ndarray, waveform: str) -> np.ndarray:
+def _carrier(cycles: np.ndarray, waveform: str, duty: float) -> np.ndarray:
     if waveform == "sinusoidal":
-        return (wave + 1.0) * 0.5
-    return (wave >= 0).astype(np.float32)
+        return (np.sin(2.0 * np.pi * cycles) + 1.0) * 0.5
+    return (np.mod(cycles, 1.0) < duty).astype(np.float32)
+
+
+def _line_carrier(cycles: np.ndarray, width_fraction: float) -> np.ndarray:
+    phase = np.mod(cycles, 1.0)
+    distance = np.minimum(phase, 1.0 - phase)
+    return (distance <= width_fraction * 0.5).astype(np.float32)
+
 
 
 class PatternOutputWindow(QtWidgets.QLabel):
