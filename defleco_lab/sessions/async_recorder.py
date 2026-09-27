@@ -25,6 +25,8 @@ class AsyncSessionRecorder:
         return self._queue.qsize()
 
     def append(self, packet: FramePacket) -> bool:
+        if self.error is not None:
+            return False
         try:
             self._queue.put_nowait(packet.copy_owned())
             return True
@@ -39,6 +41,8 @@ class AsyncSessionRecorder:
         motion_quality: float,
         cumulative_position_px: float,
     ) -> None:
+        if self.error is not None:
+            return
         try:
             self._queue.put_nowait(
                 ("motion", frame_id, estimated_motion_px, motion_quality, cumulative_position_px)
