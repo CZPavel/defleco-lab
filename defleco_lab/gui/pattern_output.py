@@ -21,6 +21,8 @@ class PatternSettings:
     mode: str = "static"
     speed_deg_s: float = 20.0
     step_deg: float = 15.0
+    render_scale: float = 0.5
+    animation_fps: int = 20
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -88,7 +90,8 @@ class PatternOutputWindow(QtWidgets.QLabel):
         self._effective_phase = self._settings.phase_deg
         self._elapsed = QtCore.QElapsedTimer()
         self._timer = QtCore.QTimer(self)
-        self._timer.setInterval(16)
+        self._timer.setTimerType(QtCore.Qt.TimerType.PreciseTimer)
+        self._timer.setInterval(50)
         self._timer.timeout.connect(self._animate)
 
     @property
@@ -107,6 +110,7 @@ class PatternOutputWindow(QtWidgets.QLabel):
             or settings.phase_deg != self._settings.phase_deg
         )
         self._settings = settings
+        self._timer.setInterval(max(16, round(1000 / max(1, int(settings.animation_fps)))))
         if reset_phase:
             self._effective_angle = settings.angle_deg
             self._effective_phase = settings.phase_deg
@@ -176,7 +180,15 @@ class PatternOutputWindow(QtWidgets.QLabel):
     def _redraw(self) -> None:
         if self.width() < 2 or self.height() < 2:
             return
-        data = render_pattern(self.width(), self.height(), self.effective_settings)
+        effective = self.effective_settings
+        render_scale = min(1.0, max(0.1, float(effective.render_scale)))
+        render_width = max(2, round(self.width() * render_scale))
+        render_height = max(2, round(self.height() * render_scale))
+        rendered_settings = replace(
+            effective,
+            period_px=max(2.0, effective.period_px * render_scale),
+        )
+        data = render_pattern(render_width, render_height, rendered_settings)
         image = QtGui.QImage(
             data.data,
             data.shape[1],
@@ -184,7 +196,19 @@ class PatternOutputWindow(QtWidgets.QLabel):
             data.strides[0],
             QtGui.QImage.Format.Format_Grayscale8,
         ).copy()
-        self.setPixmap(QtGui.QPixmap.fromImage(image))
+        pixmap = QtGui.QPixmap.fromImage(image)
+        if render_width != self.width() or render_height != self.height():
+            transform = (
+                QtCore.Qt.TransformationMode.SmoothTransformation
+                if effective.waveform == "sinusoidal"
+                else QtCore.Qt.TransformationMode.FastTransformation
+            )
+            pixmap = pixmap.scaled(
+                self.size(),
+                QtCore.Qt.AspectRatioMode.IgnoreAspectRatio,
+                transform,
+            )
+        self.setPixmap(pixmap)
 
 
 class PatternControlPanel(QtWidgets.QGroupBox):
@@ -276,6 +300,25 @@ class PatternControlPanel(QtWidgets.QGroupBox):
         self.step_size.setSuffix(" deg")
         self.step_size.setToolTip("Angle/phase increment for one reproducible step.")
 
+        self.render_scale = QtWidgets.QComboBox()
+        self.render_scale.addItem("100% (full display resolution)", 1.0)
+        self.render_scale.addItem("50% (recommended)", 0.5)
+        self.render_scale.addItem("25% (fast preview)", 0.25)
+        self.render_scale.setCurrentIndex(1)
+        self.render_scale.setToolTip(
+            "Internal pattern rendering resolution. Period remains defined in display pixels; "
+            "50% greatly reduces continuous-animation load on a 4K display."
+        )
+
+        self.animation_fps = QtWidgets.QSpinBox()
+        self.animation_fps.setRange(5, 60)
+        self.animation_fps.setValue(20)
+        self.animation_fps.setSuffix(" FPS")
+        self.animation_fps.setToolTip(
+            "Requested software redraw rate for continuous pattern motion. This is not "
+            "camera/display hardware synchronization."
+        )
+
         self.screen = QtWidgets.QComboBox()
         self.refresh_screens()
 
@@ -297,6 +340,8 @@ class PatternControlPanel(QtWidgets.QGroupBox):
         form.addRow("Mode", self.mode)
         form.addRow("Speed", self.speed)
         form.addRow("Step", self.step_size)
+        form.addRow("Pattern render quality", self.render_scale)
+        form.addRow("Animation redraw", self.animation_fps)
         form.addRow("Output display", self.screen)
         form.addRow(buttons)
 
@@ -311,6 +356,8 @@ class PatternControlPanel(QtWidgets.QGroupBox):
             self.mode,
             self.speed,
             self.step_size,
+            self.render_scale,
+            self.animation_fps,
         ):
             _connect(widget, self._settings_changed)
         self.show_button.clicked.connect(self.show_output)
@@ -345,6 +392,8 @@ class PatternControlPanel(QtWidgets.QGroupBox):
             mode=str(self.mode.currentData()),
             speed_deg_s=self.speed.value(),
             step_deg=self.step_size.value(),
+            render_scale=float(self.render_scale.currentData()),
+            animation_fps=self.animation_fps.value(),
         )
 
     def current_effective_settings(self) -> PatternSettings:
