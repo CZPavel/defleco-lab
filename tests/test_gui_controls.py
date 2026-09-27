@@ -178,3 +178,25 @@ def test_mono8_overlay_preserves_native_brightness():
     assert np.array_equal(rendered.image[..., 0], original)
     assert np.array_equal(rendered.image[..., 1], original)
     assert np.array_equal(rendered.image[..., 2], original)
+
+
+
+def test_parameter_panel_hides_irrelevant_conditional_controls() -> None:
+    app = _app()
+    panel = ParameterPanel()
+    panel.set_schema(
+        {
+            "output": {"default": "magnitude", "choices": ["magnitude", "residual"]},
+            "residual_sigma": {
+                "default": 8.0,
+                "visible_if": {"output": "residual"},
+            },
+        }
+    )
+    app.processEvents()
+    assert not panel.editors["residual_sigma"].isVisible()
+    panel.set_values({"output": "residual"})
+    panel.show()
+    app.processEvents()
+    assert panel.editors["residual_sigma"].isVisible()
+    panel.close()
