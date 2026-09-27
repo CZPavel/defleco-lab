@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import json
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
@@ -304,9 +305,11 @@ def process_capture_workspace(
                 )
                 outputs.append(output_entry)
 
+    gallery_path = _write_results_gallery(root, outputs)
     result_manifest = {
         "source_manifest": "capture_manifest.json",
         "recipes": [recipe.as_dict() for recipe in recipes],
+        "gallery": gallery_path.relative_to(root).as_posix(),
         "outputs": outputs,
     }
     path = root / "results_manifest.json"
@@ -360,16 +363,120 @@ def _save_response_variants(
         rendered = VisualizationTransform().render(response, settings, original=original)
         path = target / f"{stem}__{name}.png"
         cv2.imwrite(str(path), cv2.cvtColor(rendered.image, cv2.COLOR_RGB2BGR))
-        written[name] = str(path.relative_to(root))
+        written[name] = path.relative_to(root).as_posix()
 
     return {
         "case_id": record["case_id"],
         "group_id": record["group_id"],
         "recipe_id": recipe.recipe_id,
         "source_cases": [item["case_id"] for item in source_records],
-        "numeric_response": str(npy_path.relative_to(root)),
+        "numeric_response": npy_path.relative_to(root).as_posix(),
         "images": written,
     }
+
+
+def _write_results_gallery(root: Path, outputs: list[dict[str, Any]]) -> Path:
+    """Write a dependency-free visual index for fast human screening."""
+
+    groups = sorted({str(item["group_id"]) for item in outputs})
+    recipes = sorted({str(item["recipe_id"]) for item in outputs})
+    cards = []
+    for item in outputs:
+        images = item["images"]
+        preview = html.escape(str(images.get("color_overlay50") or images["color_full"]))
+        links = " ".join(
+            f'<a href="{html.escape(str(path))}">{html.escape(name)}</a>'
+            for name, path in images.items()
+        )
+        numeric = html.escape(str(item["numeric_response"]))
+        group_id = html.escape(str(item["group_id"]))
+        recipe_id = html.escape(str(item["recipe_id"]))
+        case_id = html.escape(str(item["case_id"]))
+        cards.append(
+            f"""
+            <article class="card" data-group="{group_id}" data-recipe="{recipe_id}"
+                    data-search="{case_id} {group_id} {recipe_id}">
+              <img loading="lazy" src="{preview}" alt="{case_id}">
+              <div class="meta">
+                <strong>{case_id}</strong>
+                <span>{group_id}</span>
+                <span>{recipe_id}</span>
+                <div class="links">{links} <a href="{numeric}">numeric .npy</a></div>
+              </div>
+            </article>
+            """
+        )
+
+    group_options = "".join(
+        f'<option value="{html.escape(value)}">{html.escape(value)}</option>' for value in groups
+    )
+    recipe_options = "".join(
+        f'<option value="{html.escape(value)}">{html.escape(value)}</option>' for value in recipes
+    )
+
+    page = f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Defleco LAB screening results</title>
+<style>
+body{{font-family:Segoe UI,Arial,sans-serif;margin:0;background:#15181c;color:#e7e9eb}}
+header{{position:sticky;top:0;z-index:3;background:#20242a;padding:14px 18px;border-bottom:1px solid #3a4048}}
+.controls{{display:flex;gap:10px;flex-wrap:wrap;align-items:center}}
+select,input{{background:#111419;color:#e7e9eb;border:1px solid #4b535d;border-radius:5px;padding:7px}}
+#count{{color:#aeb6bf;margin-left:auto}}
+.grid{{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;padding:12px}}
+.card{{background:#20242a;border:1px solid #363c44;border-radius:7px;overflow:hidden}}
+.card img{{width:100%;height:230px;object-fit:contain;background:#090b0e}}
+.meta{{padding:9px;display:grid;gap:4px}}
+.meta span{{color:#b7bec7;font-size:13px}}
+.links{{display:flex;gap:7px;flex-wrap:wrap;font-size:12px;margin-top:5px}}
+a{{color:#8fc7ff}}
+.hidden{{display:none}}
+</style>
+</head>
+<body>
+<header>
+  <strong>Defleco LAB screening results</strong>
+  <div class="controls">
+    <label>Pattern group <select id="group"><option value="">All</option>{group_options}</select></label>
+    <label>Recipe <select id="recipe"><option value="">All</option>{recipe_options}</select></label>
+    <label>Search <input id="search" type="search" placeholder="case / group / recipe"></label>
+    <span id="count"></span>
+  </div>
+</header>
+<main class="grid">
+{''.join(cards)}
+</main>
+<script>
+const group=document.querySelector('#group');
+const recipe=document.querySelector('#recipe');
+const search=document.querySelector('#search');
+const cards=[...document.querySelectorAll('.card')];
+const count=document.querySelector('#count');
+function apply(){{
+  const g=group.value, r=recipe.value, q=search.value.trim().toLowerCase();
+  let visible=0;
+  for(const card of cards){{
+    const ok=(!g||card.dataset.group===g)&&(!r||card.dataset.recipe===r)&&
+      (!q||card.dataset.search.toLowerCase().includes(q));
+    card.classList.toggle('hidden',!ok);
+    if(ok) visible++;
+  }}
+  count.textContent=visible+' / '+cards.length;
+}}
+group.addEventListener('change',apply);
+recipe.addEventListener('change',apply);
+search.addEventListener('input',apply);
+apply();
+</script>
+</body>
+</html>
+"""
+    path = root / "screening_results.html"
+    path.write_text(page, encoding="utf-8")
+    return path
 
 
 def _load_raw(root: Path, record: dict[str, Any]) -> np.ndarray:
