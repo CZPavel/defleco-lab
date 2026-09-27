@@ -319,4 +319,9 @@ class ProcessingWorker(QtCore.QThread):
                     (result, elapsed, request.scale, request.stride, motion, request.frame_id)
                 )
             except Exception as exc:  # isolate plug-in failures from thread lifecycle
-                self.failed.emit(str(exc))
+                with self._condition:
+                    report_failure = (
+                        request.generation == self._generation and not self._stopping
+                    )
+                if report_failure:
+                    self.failed.emit(str(exc))
