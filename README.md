@@ -9,7 +9,7 @@ Defleco LAB is an independent, experimental Windows desktop laboratory for compa
 ## Highlights
 
 - Single-frame gradient, Laplacian, Difference of Gaussians, local residual, structure tensor, Gabor-bank, and experimental directional-residual views.
-- Integrated full-screen physical pattern output for fine stripes, checkerboard, spiral and concentric-ring experiments.
+- Integrated full-screen physical pattern output reusing the standalone V02 families: stripes, checkerboard, rings, composite X+Y, nested squares, squircle, spiral/counter-spiral, starburst, speckle and solid field.
 - Explicit pre-processing -> analysis method -> numeric response post-processing -> display pipeline with contextual controls and tooltips.
 - Automated step-and-capture screening foundation that preserves RAW frames, runs a bounded offline recipe set, and exports identifiable grayscale/colour/50% overlay results.
 - Multi-frame difference, temporal statistics/median residual, Farneback and DIS optical flow, DIC-like local phase-correlation grid, and temporal response fusion.
