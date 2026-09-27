@@ -18,15 +18,61 @@ class Gradient(ProcessingMethod):
         "Single frame",
         1,
         False,
-        "Spatial intensity derivatives. Raw responses are kept quantitative; display scaling is handled by the viewer.",
+        (
+            "Spatial intensity derivatives. Use magnitude as the visual baseline, "
+            "or vector_residual to suppress slowly varying predictable gradient structure."
+        ),
+        recommended_use=(
+            "Fine reflected stripes/checker/spiral. Start with Scharr magnitude; "
+            "then compare vector_residual for local surface disturbances."
+        ),
         parameters={
-            "operator": {"default": "scharr", "choices": ["sobel", "scharr"]},
-            "sigma": {"default": 0.8, "minimum": 0.0, "maximum": 100.0, "step": 0.1, "units": "px"},
-            "ksize": {"default": 3, "minimum": 1, "maximum": 31, "step": 2},
+            "operator": {
+                "default": "scharr",
+                "choices": ["sobel", "scharr"],
+                "tooltip": "Scharr is a good default for small rotationally balanced derivatives.",
+            },
+            "sigma": {
+                "default": 0.8,
+                "minimum": 0.0,
+                "maximum": 100.0,
+                "step": 0.1,
+                "units": "px",
+                "tooltip": "Input smoothing before the derivative. Keep small for fine patterns.",
+            },
+            "ksize": {
+                "default": 3,
+                "minimum": 1,
+                "maximum": 31,
+                "step": 2,
+                "tooltip": "Sobel kernel size; ignored when Scharr is selected.",
+                "visible_if": {"operator": "sobel"},
+            },
+            "residual_sigma": {
+                "default": 8.0,
+                "minimum": 0.1,
+                "maximum": 500.0,
+                "step": 0.5,
+                "units": "px",
+                "tooltip": (
+                    "Local scale used to predict the smooth gradient field. "
+                    "The vector residual keeps deviations from that prediction."
+                ),
+                "visible_if": {"output": "vector_residual"},
+            },
             "output": {
                 "default": "magnitude",
-                "choices": ["magnitude", "gradient_x", "gradient_y"],
-                "tooltip": "Select the numerical response map. Display normalization is separate.",
+                "choices": [
+                    "magnitude",
+                    "gradient_x",
+                    "gradient_y",
+                    "orientation",
+                    "vector_residual",
+                ],
+                "tooltip": (
+                    "Magnitude is the raw edge-strength baseline. Vector residual subtracts "
+                    "a locally smooth Gx/Gy field and is intended to suppress predictable lines."
+                ),
             },
         },
     )
@@ -41,12 +87,43 @@ class Gradient(ProcessingMethod):
             ksize = int(self.parameters["ksize"])
             gx = cv2.Sobel(a, cv2.CV_32F, 1, 0, ksize=ksize)
             gy = cv2.Sobel(a, cv2.CV_32F, 0, 1, ksize=ksize)
+
+        output = self.parameters["output"]
+        keep = context.get("keep_intermediates", True)
         mag = cv2.magnitude(gx, gy)
-        maps = {"magnitude": mag, "gradient_x": gx, "gradient_y": gy}
-        primary = maps[self.parameters["output"]]
-        if not context.get("keep_intermediates", True):
+        orientation = None
+        residual = None
+        if keep or output == "orientation":
+            orientation = np.arctan2(gy, gx).astype(np.float32)
+        if keep or output == "vector_residual":
+            sigma = float(self.parameters["residual_sigma"])
+            smooth_x = _blur(gx, sigma)
+            smooth_y = _blur(gy, sigma)
+            residual = cv2.magnitude(gx - smooth_x, gy - smooth_y)
+
+        primary = {
+            "magnitude": mag,
+            "gradient_x": gx,
+            "gradient_y": gy,
+            "orientation": orientation,
+            "vector_residual": residual,
+        }[output]
+        assert primary is not None
+
+        if not keep:
             return ProcessingResult(primary)
-        return ProcessingResult(primary, maps)
+        assert orientation is not None and residual is not None
+        return ProcessingResult(
+            primary,
+            {
+                "magnitude": mag,
+                "gradient_x": gx,
+                "gradient_y": gy,
+                "orientation": orientation,
+                "vector_residual": residual,
+            },
+        )
+
 
 class Laplacian(ProcessingMethod):
     info = MethodInfo(
@@ -139,16 +216,28 @@ class StructureTensor(ProcessingMethod):
         "Single frame",
         1,
         False,
-        "Local fringe orientation, coherence and orientation disturbance using pi-periodic double-angle smoothing.",
-        recommended_use="Static reflected stripes/fringes; orientation_residual is the most defect-oriented starting output.",
+        (
+            "Local fringe orientation and two-dimensional structure from the image gradient. "
+            "The additional line-suppressed outputs are intended to reduce ordinary long lines "
+            "and emphasize locally mixed/crossing structure."
+        ),
+        recommended_use=(
+            "Static reflected stripes/fringes: orientation_residual. "
+            "Checkerboard or locally tangled lines: compare linearity_suppressed and junction_response."
+        ),
         parameters={
-            "operator": {"default": "scharr", "choices": ["sobel", "scharr"]},
+            "operator": {
+                "default": "scharr",
+                "choices": ["sobel", "scharr"],
+                "tooltip": "Derivative operator used to build the local tensor.",
+            },
             "derivative_sigma": {
                 "default": 0.8,
                 "minimum": 0.0,
                 "maximum": 100.0,
                 "step": 0.1,
                 "units": "px",
+                "tooltip": "Small pre-smoothing before gradient calculation.",
             },
             "tensor_sigma": {
                 "default": 2.0,
@@ -156,6 +245,7 @@ class StructureTensor(ProcessingMethod):
                 "maximum": 200.0,
                 "step": 0.1,
                 "units": "px",
+                "tooltip": "Local neighbourhood over which gradient directions are combined.",
             },
             "orientation_smooth_sigma": {
                 "default": 8.0,
@@ -163,10 +253,26 @@ class StructureTensor(ProcessingMethod):
                 "maximum": 500.0,
                 "step": 0.5,
                 "units": "px",
+                "tooltip": (
+                    "Expected smooth orientation scale. Orientation residual highlights "
+                    "local deviations from this slowly varying field."
+                ),
+                "visible_if": {"output": "orientation_residual"},
             },
             "output": {
                 "default": "orientation_residual",
-                "choices": ["orientation_residual", "coherence", "anisotropy", "orientation"],
+                "choices": [
+                    "orientation_residual",
+                    "linearity_suppressed",
+                    "junction_response",
+                    "coherence",
+                    "anisotropy",
+                    "orientation",
+                ],
+                "tooltip": (
+                    "orientation_residual highlights local bending; linearity_suppressed "
+                    "and junction_response reduce simple one-direction line responses."
+                ),
             },
         },
     )
@@ -184,27 +290,44 @@ class StructureTensor(ProcessingMethod):
         jxx = _blur(gx * gx, sigma)
         jyy = _blur(gy * gy, sigma)
         jxy = _blur(gx * gy, sigma)
+        energy = (jxx + jyy).astype(np.float32)
         root = np.sqrt((jxx - jyy) ** 2 + 4 * jxy * jxy).astype(np.float32)
-        coherence = (root / (jxx + jyy + 1e-6)).astype(np.float32)
+        coherence = (root / (energy + 1e-6)).astype(np.float32)
 
         output = self.parameters["output"]
-        need_orientation = output in {"orientation", "orientation_residual"} or context.get(
-            "keep_intermediates", True
-        )
+        keep = context.get("keep_intermediates", True)
+        need_orientation = output in {"orientation", "orientation_residual"} or keep
+        need_eigen = output in {"linearity_suppressed", "junction_response"} or keep
+
         theta = None
         residual = None
         if need_orientation:
             theta = (0.5 * np.arctan2(2 * jxy, jxx - jyy)).astype(np.float32)
-            smooth_sigma = float(self.parameters["orientation_smooth_sigma"])
-            cos2 = _blur(np.cos(2 * theta) * coherence, smooth_sigma)
-            sin2 = _blur(np.sin(2 * theta) * coherence, smooth_sigma)
-            smooth = 0.5 * np.arctan2(sin2, cos2)
-            residual = np.abs(
-                0.5
-                * np.arctan2(
-                    np.sin(2 * (theta - smooth)),
-                    np.cos(2 * (theta - smooth)),
-                )
+            if output == "orientation_residual" or keep:
+                smooth_sigma = float(self.parameters["orientation_smooth_sigma"])
+                cos2 = _blur(np.cos(2 * theta) * coherence, smooth_sigma)
+                sin2 = _blur(np.sin(2 * theta) * coherence, smooth_sigma)
+                smooth = 0.5 * np.arctan2(sin2, cos2)
+                residual = np.abs(
+                    0.5
+                    * np.arctan2(
+                        np.sin(2 * (theta - smooth)),
+                        np.cos(2 * (theta - smooth)),
+                    )
+                ).astype(np.float32)
+
+        l1 = None
+        l2 = None
+        linearity_suppressed = None
+        junction = None
+        if need_eigen:
+            l1 = ((energy + root) / 2).astype(np.float32)
+            l2 = ((energy - root) / 2).astype(np.float32)
+            # A pure line has a very small second eigenvalue.  Mixed directions,
+            # corners and local tangling make both eigenvalues significant.
+            linearity_suppressed = np.maximum(l2, 0).astype(np.float32)
+            junction = (
+                np.maximum(l1, 0) * np.maximum(l2, 0) / (l1 + l2 + 1e-6)
             ).astype(np.float32)
 
         primary_map = {
@@ -212,19 +335,23 @@ class StructureTensor(ProcessingMethod):
             "anisotropy": root,
             "orientation": theta,
             "orientation_residual": residual,
+            "linearity_suppressed": linearity_suppressed,
+            "junction_response": junction,
         }[output]
         assert primary_map is not None
 
-        if not context.get("keep_intermediates", True):
+        if not keep:
             return ProcessingResult(primary_map)
 
-        l1 = ((jxx + jyy + root) / 2).astype(np.float32)
-        l2 = ((jxx + jyy - root) / 2).astype(np.float32)
         assert theta is not None and residual is not None
+        assert l1 is not None and l2 is not None
+        assert linearity_suppressed is not None and junction is not None
         return ProcessingResult(
             primary_map,
             {
                 "orientation_residual": residual,
+                "linearity_suppressed": linearity_suppressed,
+                "junction_response": junction,
                 "coherence": coherence,
                 "anisotropy": root,
                 "orientation": theta,
@@ -232,6 +359,7 @@ class StructureTensor(ProcessingMethod):
                 "lambda2": l2,
             },
         )
+
 
 class GaborBank(ProcessingMethod):
     info = MethodInfo(
