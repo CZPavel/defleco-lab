@@ -45,18 +45,20 @@ controls relevant to that output.
 
 The physical pattern generator is part of the same application but remains
 architecturally separate from camera acquisition and analysis. A full-screen,
-borderless output window can be placed on the external display. The current
-integrated families focus on the patterns that were useful in the first physical
-screening: fine stripes, checkerboard, single spiral and concentric rings.
+borderless output window can be placed on the external display. The integrated renderer reuses the established V02 pattern families: stripes,
+checkerboard, circular/ring fringes, composite X+Y, nested squares, squircle,
+spiral, counter-spiral, starburst, speckle and solid field. The first physical
+screening still prioritises fine stripes, checkerboard, single spiral and rings.
 
 Pattern state is deterministic in static/stepped mode. This makes a software-level
 step-and-capture sequence possible without pretending that the display and camera
 have hardware-level frame synchronization. Continuous rotation remains available
 for visual screening.
 
-The earlier standalone dynamic-pattern PoC remains the design source for additional
-pattern families and future timing/sync features; the integrated application should
-reuse those established pattern concepts rather than reinventing them.
+The earlier standalone dynamic-pattern PoC remains the design source for timing/sync,
+breathing, centre-offset and other future pattern-output features; the integrated
+application should continue reusing those established concepts rather than
+rediscovering them.
 
 ## Automated screening
 
