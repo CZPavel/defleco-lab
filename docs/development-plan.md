@@ -84,11 +84,16 @@ alpha overlays are for a human observer only.
 ### Pattern-generator source continuity
 
 - [x] the standalone `GPixel_Deflecto_Dynamic_Pattern_Generator_PoC_V02.html`
-      is treated as an existing design/source to reuse, not something to rediscover;
-- [~] the integrated app currently covers the pattern families already most useful
-      in the first physical test: stripes, checkerboard, spiral and rings;
-- [ ] migrate additional V02 families only when useful for screening: composite X+Y,
-      nested squares, squircle, counter-spiral, starburst, speckle and solid;
+      is treated as the existing design/source to reuse, not something to rediscover;
+- [~] the integrated renderer now carries the V02 pattern families: stripes,
+      checkerboard, circular/rings, composite X+Y, nested squares, squircle,
+      spiral, counter-spiral, starburst, speckle and solid;
+- [~] pattern-specific controls are contextual (duty/line width, squircle power,
+      spiral arms/width, spokes, speckle size/seed) and the main first-test
+      families remain visually prioritised through hints and Quick Screening;
+- [~] Extended Screening includes a bounded subset of the additional V02 families
+      rather than multiplying every pattern by every parameter;
+- [ ] migrate V02 centre offsets only if optical setup adjustment needs them;
 - [ ] consider V02 sync patch, breathing and auto-cycle concepts when timing or
       broader pattern screening becomes the actual experiment bottleneck.
 
