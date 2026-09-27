@@ -551,7 +551,7 @@ class ScreeningProcessingWorker(QtCore.QThread):
                 self.completed.emit(str(path))
         except InterruptedError:
             self.cancelled.emit()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - worker boundary must report all failures
             # Keep worker failures visible to the operator; otherwise an unexpected
             # processing exception can terminate the thread while the GUI still
             # appears to be running the experiment.
