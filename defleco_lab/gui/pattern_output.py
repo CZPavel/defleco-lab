@@ -62,8 +62,8 @@ def render_pattern(width: int, height: int, settings: PatternSettings) -> np.nda
 
     if settings.invert:
         signal = 1.0 - signal
-    peak = np.clip(float(settings.brightness), 0.0, 100.0) * 2.55
-    return np.clip(signal * peak, 0, 255).astype(np.uint8)
+    peak = round(np.clip(float(settings.brightness), 0.0, 100.0) * 255.0 / 100.0)
+    return np.rint(np.clip(signal * peak, 0, 255)).astype(np.uint8)
 
 
 def _wave_to_level(wave: np.ndarray, waveform: str) -> np.ndarray:
