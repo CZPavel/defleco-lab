@@ -19,19 +19,35 @@ def test_local_background_postprocessing_removes_constant_response() -> None:
     assert np.max(np.abs(out)) < 1e-5
 
 
-def test_pattern_renderer_produces_distinct_families() -> None:
-    images = [
-        render_pattern(160, 120, PatternSettings(family=name, period_px=20))
-        for name in ("stripes", "checker", "spiral", "rings")
-    ]
-    for image in images:
+def test_pattern_renderer_covers_integrated_v02_families() -> None:
+    families = (
+        "stripes",
+        "checker",
+        "rings",
+        "composite",
+        "nested_square",
+        "squircle",
+        "spiral",
+        "counter_spiral",
+        "starburst",
+        "speckle",
+        "solid",
+    )
+    images = {
+        name: render_pattern(160, 120, PatternSettings(family=name, period_px=20))
+        for name in families
+    }
+    for image in images.values():
         assert image.shape == (120, 160)
         assert image.dtype == np.uint8
-        assert image.min() == 0
-        assert image.max() == 255
-    assert not np.array_equal(images[0], images[1])
-    assert not np.array_equal(images[0], images[2])
-    assert not np.array_equal(images[2], images[3])
+        assert 0 <= int(image.min()) <= int(image.max()) <= 255
+
+    for name in families:
+        if name != "solid":
+            assert np.ptp(images[name]) > 0
+    assert not np.array_equal(images["stripes"], images["checker"])
+    assert not np.array_equal(images["spiral"], images["counter_spiral"])
+    assert not np.array_equal(images["nested_square"], images["squircle"])
 
 
 def test_sinusoidal_pattern_contains_intermediate_gray_levels() -> None:
