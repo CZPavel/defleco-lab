@@ -826,6 +826,13 @@ class MainWindow(QtWidgets.QMainWindow):
         )
 
     def _camera_restored(self, failures: list[str]) -> None:
+        sender = self.sender()
+        if (
+            isinstance(sender, BaslerAcquisitionWorker)
+            and self.camera_worker is not None
+            and sender is not self.camera_worker
+        ):
+            return
         if failures:
             prefix = "Camera error cleanup warning" if self._camera_error_active else (
                 "Temporary camera settings restore warning"
@@ -843,6 +850,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
     @QtCore.Slot(str)
     def _camera_failed(self, message: str) -> None:
+        sender = self.sender()
+        if isinstance(sender, BaslerAcquisitionWorker) and sender is not self.camera_worker:
+            return
         self._camera_error_active = True
         self._camera_error_message = message
         self.camera_timer.stop()
@@ -868,6 +878,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
     @QtCore.Slot(object)
     def _camera_metrics(self, metrics: dict[str, float | int]) -> None:
+        sender = self.sender()
+        if isinstance(sender, BaslerAcquisitionWorker) and sender is not self.camera_worker:
+            return
         self.camera_metrics = dict(metrics)
         if self.source_combo.currentText() == "Basler":
             self.received_fps = float(metrics.get("received_fps", 0.0))
