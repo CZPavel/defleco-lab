@@ -223,7 +223,7 @@ Initial display variants to export:
 ### Phase C - result review
 
 - [~] identifiable filenames and JSON manifests; CSV summary remains optional;
-- [ ] gallery/filter view by pattern, method and recipe;
+- [~] browsable HTML gallery with filtering by pattern group and processing recipe;
 - [ ] compare 2/4 cases side by side;
 - [ ] optional Defect ROI and Healthy Reference ROI;
 - [ ] simple robust contrast score between defect and reference ROI;
