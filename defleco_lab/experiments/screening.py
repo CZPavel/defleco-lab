@@ -87,7 +87,7 @@ def _angle_group(family: str, period: float, values: list[float]) -> list[Patter
                 family=family,
                 period_px=period,
                 angle_deg=angle,
-                mode="static",
+                mode="step",
                 waveform="binary",
             ),
         )
