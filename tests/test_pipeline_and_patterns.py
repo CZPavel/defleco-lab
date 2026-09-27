@@ -36,4 +36,6 @@ def test_pattern_renderer_produces_distinct_families() -> None:
 
 def test_sinusoidal_pattern_contains_intermediate_gray_levels() -> None:
     image = render_pattern(160, 120, PatternSettings(family="stripes", period_px=24, waveform="sinusoidal"))
-    assert len(np.unique(image)) > 16
+    # Integer pixel sampling of a 24 px sine contains repeated symmetric levels,
+    # but it must remain a genuine multi-level carrier rather than a binary pattern.
+    assert len(np.unique(image)) > 8
