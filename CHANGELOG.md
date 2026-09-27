@@ -2,12 +2,12 @@
 
 ## Unreleased
 
-- Integrated the physical pattern generator into Defleco LAB with external-display output, static/stepped/continuous modes, and the first real-test pattern families (fine stripes, checkerboard, spiral and rings).
+- Integrated the standalone V02 pattern concepts into Defleco LAB with external-display output, static/stepped/continuous modes, contextual controls, and stripes/checker/rings/composite/nested-square/squircle/spiral/counter-spiral/starburst/speckle/solid families.
 - Reorganized the operator workflow into explicit Pre-processing -> Analysis method -> Response post-processing -> Display stages with contextual parameter visibility and explanatory tooltips.
 - Removed routine exposure/gain/ROI/FPS editing from the Defleco operator UI; normal camera setup is intentionally delegated to Basler pylon Viewer while acquisition remains in Defleco.
 - Added configurable numeric pre-processing (scale, contrast, brightness, gamma, blur, optional CLAHE) and response post-processing (local background subtraction, absolute response, smoothing, gain).
 - Added Scharr/Sobel vector-residual and orientation outputs plus Structure Tensor line-suppressed and junction-oriented response maps for physical defect screening.
-- Added a bounded automated screening workflow: deterministic step-and-capture pattern cases, incremental RAW manifest, offline named analysis recipes, numeric response export, and grayscale/colour/50% overlay variants.
+- Added a bounded automated screening workflow: deterministic step-and-capture pattern cases, timing/display metadata, incremental RAW manifest, quick/extended offline recipe sets, numeric response export, grayscale/colour/50% overlay variants, and a browsable HTML result gallery.
 - Added an operator guide and a persistent development/context tracker so physical observations, implemented features, pending validation and future method work remain explicit across development sessions.
 - Fixed several PoC-processing correctness issues: invalid preset keys are now rejected instead of silently ignored, and all shipped presets are schema-valid.
 - Structure Tensor and Gabor now expose defect-oriented primary outputs (including orientation residual) directly in the Processed view.
