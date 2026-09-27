@@ -602,6 +602,7 @@ class MainWindow(QtWidgets.QMainWindow):
         record = case.as_dict()
         record["raw_file"] = raw_name
         record["frame"] = packet.public_metadata()
+        record["capture_delay_ms"] = round(elapsed_ms, 3)
         self._experiment_records.append(record)
         self._write_capture_manifest(status="capturing")
         self._experiment_next_case()
@@ -609,11 +610,26 @@ class MainWindow(QtWidgets.QMainWindow):
     def _write_capture_manifest(self, status: str) -> None:
         if self._experiment_root is None:
             return
+        screens = QtGui.QGuiApplication.screens()
+        screen_index = self.pattern_output.screen.currentData()
+        display = None
+        if screens:
+            index = 0 if screen_index is None else max(0, min(int(screen_index), len(screens) - 1))
+            screen = screens[index]
+            geometry = screen.geometry()
+            display = {
+                "index": index,
+                "name": screen.name(),
+                "width": geometry.width(),
+                "height": geometry.height(),
+                "refresh_hz_reported": round(float(screen.refreshRate()), 3),
+            }
         payload = {
             "version": 1,
             "status": status,
             "profile": self._experiment_profile,
             "settle_ms": self._experiment_settle_ms,
+            "display": display,
             "captured_count": len(self._experiment_records),
             "planned_count": len(self._experiment_cases),
             "captures": self._experiment_records,
