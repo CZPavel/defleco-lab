@@ -81,6 +81,17 @@ alpha overlays are for a human observer only.
 - [ ] measure/record display refresh timing;
 - [ ] optional photodiode/sync patch if timing uncertainty later matters.
 
+### Pattern-generator source continuity
+
+- [x] the standalone `GPixel_Deflecto_Dynamic_Pattern_Generator_PoC_V02.html`
+      is treated as an existing design/source to reuse, not something to rediscover;
+- [~] the integrated app currently covers the pattern families already most useful
+      in the first physical test: stripes, checkerboard, spiral and rings;
+- [ ] migrate additional V02 families only when useful for screening: composite X+Y,
+      nested squares, squircle, counter-spiral, starburst, speckle and solid;
+- [ ] consider V02 sync patch, breathing and auto-cycle concepts when timing or
+      broader pattern screening becomes the actual experiment bottleneck.
+
 ### Contextual analysis UI
 
 - [~] pipeline displayed as Pre-processing -> Analysis method -> Post-processing -> Display;
@@ -171,42 +182,42 @@ The intended experiment is deliberately split into acquisition and offline analy
 
 ### Phase A - pattern acquisition
 
-- [ ] Experiment workspace / output folder selection;
-- [ ] deterministic case IDs;
-- [ ] pattern manifest stored with every captured case;
-- [ ] stepped static capture: set pattern -> wait for display settling -> acquire frame;
-- [ ] configurable settling time in display refreshes or milliseconds;
+- [~] Experiment workspace / output folder selection;
+- [~] deterministic case IDs;
+- [~] pattern manifest stored with every captured case;
+- [~] stepped capture: set known pattern state -> wait for display settling -> acquire a newer camera frame;
+- [~] configurable settling time in milliseconds; refresh-count timing remains future work;
 - [ ] first screening set:
   - fine stripes at several periods and orientations;
   - checkerboard at several cell sizes/orientations;
   - single spiral at several periods/phases;
   - rings at several periods/phases;
 - [ ] short continuous-pattern recording for comparison with stepped acquisition;
-- [ ] preserve raw camera frames unchanged.
+- [~] preserve captured camera frames losslessly as RAW experiment PNG files plus camera metadata.
 
 For the stationary-car PoC, stepped acquisition is preferred because it gives
 known pattern state without requiring precise display/camera hardware triggering.
 
 ### Phase B - offline processing sweep
 
-- [ ] run saved raw cases through selected single-frame recipes;
-- [ ] run pattern sequences through selected multi-frame recipes;
-- [ ] do not generate a blind Cartesian product of every numeric parameter;
-- [ ] use named, physically meaningful recipes/ranges;
-- [ ] compute each numeric response once;
-- [ ] render presentation variants from that response without recomputing analysis.
+- [~] run saved raw cases through a bounded initial set of single-frame recipes;
+- [~] run ordered pattern groups through initial multi-frame Frame Difference / Temporal Statistics recipes;
+- [x] do not generate a blind Cartesian product of every numeric parameter;
+- [~] use named, physically meaningful recipes/ranges;
+- [x] compute each numeric response once;
+- [x] render presentation variants from that response without recomputing analysis.
 
 Initial display variants to export:
 
-- [ ] grayscale response;
-- [ ] colour response;
-- [ ] grayscale 50% overlay;
-- [ ] colour 50% overlay;
-- [ ] full response view where useful.
+- [~] grayscale response;
+- [~] colour response;
+- [~] grayscale 50% overlay;
+- [~] colour 50% overlay;
+- [~] full response view through full grayscale/colour response exports.
 
 ### Phase C - result review
 
-- [ ] identifiable filenames and JSON/CSV manifest;
+- [~] identifiable filenames and JSON manifests; CSV summary remains optional;
 - [ ] gallery/filter view by pattern, method and recipe;
 - [ ] compare 2/4 cases side by side;
 - [ ] optional Defect ROI and Healthy Reference ROI;
