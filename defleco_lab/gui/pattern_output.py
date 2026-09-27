@@ -260,10 +260,19 @@ class PatternOutputWindow(QtWidgets.QLabel):
         render_scale = min(1.0, max(0.1, float(effective.render_scale)))
         render_width = max(2, round(self.width() * render_scale))
         render_height = max(2, round(self.height() * render_scale))
+
+        # QWidget geometry is expressed in Qt device-independent pixels. On a
+        # Windows display using e.g. 150% scaling, 2160x3840 physical pixels are
+        # typically exposed as 1440x2560 logical pixels. Keep period/speckle
+        # controls defined in physical display pixels so experiments remain
+        # reproducible regardless of desktop scaling or portrait orientation.
+        dpr = max(0.1, float(self.devicePixelRatioF()))
         rendered_settings = replace(
             effective,
-            period_px=max(2.0, effective.period_px * render_scale),
-            speckle_size_px=max(1, round(effective.speckle_size_px * render_scale)),
+            period_px=max(2.0, effective.period_px * render_scale / dpr),
+            speckle_size_px=max(
+                1, round(effective.speckle_size_px * render_scale / dpr)
+            ),
         )
         data = render_pattern(render_width, render_height, rendered_settings)
         image = QtGui.QImage(
@@ -333,7 +342,8 @@ class PatternControlPanel(QtWidgets.QGroupBox):
         self.period.setSingleStep(2.0)
         self.period.setSuffix(" px")
         self.period.setToolTip(
-            "Pattern fineness in display pixels. Smaller values make a finer pattern."
+            "Pattern fineness in physical display pixels. Smaller values make a finer pattern. "
+            "Desktop scaling is compensated automatically."
         )
 
         self.waveform = QtWidgets.QComboBox()
@@ -398,7 +408,9 @@ class PatternControlPanel(QtWidgets.QGroupBox):
         self.speckle_size.setRange(1, 256)
         self.speckle_size.setValue(24)
         self.speckle_size.setSuffix(" px")
-        self.speckle_size.setToolTip("Square speckle-cell size in display pixels.")
+        self.speckle_size.setToolTip(
+            "Square speckle-cell size in physical display pixels; desktop scaling is compensated."
+        )
 
         self.seed = QtWidgets.QSpinBox()
         self.seed.setRange(0, 2_000_000_000)
@@ -522,8 +534,21 @@ class PatternControlPanel(QtWidgets.QGroupBox):
         screens = QtGui.QGuiApplication.screens()
         for index, screen in enumerate(screens):
             geometry = screen.geometry()
+            dpr = max(0.1, float(screen.devicePixelRatio()))
+            physical_width = round(geometry.width() * dpr)
+            physical_height = round(geometry.height() * dpr)
+            orientation = "portrait" if physical_height > physical_width else "landscape"
+            if abs(dpr - 1.0) < 0.01:
+                description = (
+                    f"{physical_width}x{physical_height} px, {orientation}"
+                )
+            else:
+                description = (
+                    f"{physical_width}x{physical_height} px, {orientation}; "
+                    f"Qt {geometry.width()}x{geometry.height()} @ {dpr:.2f}x"
+                )
             self.screen.addItem(
-                f"{index + 1}: {screen.name()} ({geometry.width()}x{geometry.height()})",
+                f"{index + 1}: {screen.name()} ({description})",
                 index,
             )
         preferred = 1 if len(screens) > 1 else 0
