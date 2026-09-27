@@ -287,7 +287,11 @@ class BaslerSource:
 
     def start(self) -> None:
         pylon = _pylon()
-        self.camera.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
+        # Keep SDK delivery ordered and let the application's own bounded mailbox
+        # decide where back-pressure is handled. LatestImageOnly can discard frames
+        # inside pylon before Defleco can count/report them, which is undesirable for
+        # temporal analysis and raw recording.
+        self.camera.StartGrabbing(pylon.GrabStrategy_OneByOne)
 
     def grab(self, timeout_ms: int = 1000) -> FramePacket:
         pylon = _pylon()
