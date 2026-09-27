@@ -91,3 +91,33 @@ def test_gabor_can_return_orientation_residual_as_primary():
     assert result.primary.shape == a.shape
     assert np.isfinite(result.primary).all()
     assert not result.intermediates
+
+
+
+def test_structure_tensor_line_suppression_prefers_mixed_directions() -> None:
+    size = 128
+    stripe = np.zeros((size, size), np.float32)
+    stripe[:, size // 2 :] = 255.0
+
+    cross = stripe.copy()
+    cross[size // 2 :, :] += 255.0
+    cross = np.clip(cross, 0, 255)
+
+    line_response = StructureTensor(
+        tensor_sigma=3.0, output="linearity_suppressed"
+    ).process([stripe], keep_intermediates=False).primary
+    cross_response = StructureTensor(
+        tensor_sigma=3.0, output="linearity_suppressed"
+    ).process([cross], keep_intermediates=False).primary
+
+    center = np.s_[size // 2 - 5 : size // 2 + 6, size // 2 - 5 : size // 2 + 6]
+    assert float(cross_response[center].mean()) > float(line_response[center].mean()) + 1.0
+
+
+def test_structure_tensor_junction_response_is_finite() -> None:
+    a = image()
+    result = StructureTensor(output="junction_response").process(
+        [a], keep_intermediates=False
+    )
+    assert result.primary.shape == a.shape
+    assert np.isfinite(result.primary).all()
