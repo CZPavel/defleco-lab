@@ -21,6 +21,18 @@ def test_quick_screening_plan_is_bounded_and_identifiable() -> None:
     }
 
 
+def test_extended_screening_reuses_additional_v02_pattern_families() -> None:
+    families = {case.settings.family for case in build_pattern_cases("extended")}
+    assert {
+        "composite",
+        "nested_square",
+        "squircle",
+        "counter_spiral",
+        "starburst",
+        "solid",
+    } <= families
+
+
 def test_offline_screening_reuses_raw_frames_and_exports_variants(tmp_path) -> None:
     raw = tmp_path / "raw"
     raw.mkdir()
