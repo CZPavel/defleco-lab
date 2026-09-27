@@ -11,8 +11,8 @@ import numpy as np
 from PySide6 import QtCore
 
 from defleco_lab.motion import MotionROI, PhaseMotionEstimator, compensate_translation
-from defleco_lab.processing.registry import registry
 from defleco_lab.processing.pipeline import apply_postprocessing, apply_preprocessing
+from defleco_lab.processing.registry import registry
 
 
 @dataclass(slots=True)
