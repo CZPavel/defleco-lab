@@ -620,6 +620,8 @@ class MainWindow(QtWidgets.QMainWindow):
         if packet_is_stale:
             if elapsed_ms > max(5000.0, self._experiment_settle_ms + 3000.0):
                 self.experiment_timer.stop()
+                self._experiment_not_before_ns = None
+                self.pattern_output.output.hide_output()
                 self.experiment.failed("Timed out waiting for a new camera frame.")
                 self._write_capture_manifest(status="error")
             return
@@ -629,6 +631,8 @@ class MainWindow(QtWidgets.QMainWindow):
         raw_name = f"raw/{case.case_id}.png"
         raw_path = self._experiment_root / raw_name
         if not cv2.imwrite(str(raw_path), packet.image):
+            self._experiment_not_before_ns = None
+            self.pattern_output.output.hide_output()
             self.experiment.failed(f"Could not save {raw_path}")
             self._write_capture_manifest(status="error")
             return
@@ -668,9 +672,10 @@ class MainWindow(QtWidgets.QMainWindow):
             "planned_count": len(self._experiment_cases),
             "captures": self._experiment_records,
         }
-        (self._experiment_root / "capture_manifest.json").write_text(
-            json.dumps(payload, indent=2), encoding="utf-8"
-        )
+        target = self._experiment_root / "capture_manifest.json"
+        temporary = self._experiment_root / "capture_manifest.json.tmp"
+        temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        temporary.replace(target)
 
     def _finish_capture_experiment(self) -> None:
         self.experiment_timer.stop()
