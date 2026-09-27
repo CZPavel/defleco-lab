@@ -287,8 +287,15 @@ class PatternControlPanel(QtWidgets.QGroupBox):
         self.family = QtWidgets.QComboBox()
         self.family.addItem("Fine stripes", "stripes")
         self.family.addItem("Checkerboard", "checker")
-        self.family.addItem("Single spiral", "spiral")
         self.family.addItem("Concentric rings", "rings")
+        self.family.addItem("Composite X + Y", "composite")
+        self.family.addItem("Nested squares", "nested_square")
+        self.family.addItem("Squircle / superellipse", "squircle")
+        self.family.addItem("Single spiral", "spiral")
+        self.family.addItem("Counter-spiral pair", "counter_spiral")
+        self.family.addItem("Starburst / spokes", "starburst")
+        self.family.addItem("Pseudo-random speckle", "speckle")
+        self.family.addItem("Solid field", "solid")
         self.family.setToolTip(
             "Physical reference pattern reflected by the painted surface. "
             "The names describe the generated pattern, not an analysis method."
@@ -322,7 +329,55 @@ class PatternControlPanel(QtWidgets.QGroupBox):
         self.phase.setValue(0.0)
         self.phase.setSingleStep(10.0)
         self.phase.setSuffix(" deg")
-        self.phase.setToolTip("Carrier phase, mainly useful for sinusoidal/ring experiments.")
+        self.phase.setToolTip("Carrier phase / radial shift of the generated pattern.")
+
+        self.duty = QtWidgets.QDoubleSpinBox()
+        self.duty.setRange(5.0, 95.0)
+        self.duty.setValue(50.0)
+        self.duty.setSingleStep(5.0)
+        self.duty.setSuffix(" %")
+        self.duty.setToolTip(
+            "Bright fraction or line width of binary pattern periods. "
+            "For sinusoidal carriers this has no effect."
+        )
+
+        self.squircle_power = QtWidgets.QDoubleSpinBox()
+        self.squircle_power.setRange(2.0, 32.0)
+        self.squircle_power.setValue(6.0)
+        self.squircle_power.setSingleStep(0.5)
+        self.squircle_power.setToolTip(
+            "Superellipse power: 2 is circular, higher values approach a square."
+        )
+
+        self.spiral_arms = QtWidgets.QSpinBox()
+        self.spiral_arms.setRange(1, 12)
+        self.spiral_arms.setValue(1)
+        self.spiral_arms.setToolTip(
+            "Number of Archimedean spiral arms. Start with one fine arm for the current PoC."
+        )
+
+        self.spiral_width = QtWidgets.QDoubleSpinBox()
+        self.spiral_width.setRange(3.0, 90.0)
+        self.spiral_width.setValue(20.0)
+        self.spiral_width.setSingleStep(2.0)
+        self.spiral_width.setSuffix(" %")
+        self.spiral_width.setToolTip("Bright spiral-line width as a fraction of radial pitch.")
+
+        self.spokes = QtWidgets.QSpinBox()
+        self.spokes.setRange(2, 96)
+        self.spokes.setValue(18)
+        self.spokes.setToolTip("Number of bright radial spokes in the starburst pattern.")
+
+        self.speckle_size = QtWidgets.QSpinBox()
+        self.speckle_size.setRange(1, 256)
+        self.speckle_size.setValue(24)
+        self.speckle_size.setSuffix(" px")
+        self.speckle_size.setToolTip("Square speckle-cell size in display pixels.")
+
+        self.seed = QtWidgets.QSpinBox()
+        self.seed.setRange(0, 2_000_000_000)
+        self.seed.setValue(12345)
+        self.seed.setToolTip("Deterministic pseudo-random seed for repeatable speckle patterns.")
 
         self.brightness = QtWidgets.QSpinBox()
         self.brightness.setRange(1, 100)
@@ -390,6 +445,13 @@ class PatternControlPanel(QtWidgets.QGroupBox):
         form.addRow("Waveform", self.waveform)
         form.addRow("Angle", self.angle)
         form.addRow("Phase", self.phase)
+        form.addRow("Duty / line width", self.duty)
+        form.addRow("Squircle power", self.squircle_power)
+        form.addRow("Spiral arms", self.spiral_arms)
+        form.addRow("Spiral width", self.spiral_width)
+        form.addRow("Starburst spokes", self.spokes)
+        form.addRow("Speckle size", self.speckle_size)
+        form.addRow("Speckle seed", self.seed)
         form.addRow("Brightness", self.brightness)
         form.addRow(self.invert)
         form.addRow("Mode", self.mode)
@@ -406,6 +468,13 @@ class PatternControlPanel(QtWidgets.QGroupBox):
             self.waveform,
             self.angle,
             self.phase,
+            self.duty,
+            self.squircle_power,
+            self.spiral_arms,
+            self.spiral_width,
+            self.spokes,
+            self.speckle_size,
+            self.seed,
             self.brightness,
             self.invert,
             self.mode,
@@ -436,15 +505,26 @@ class PatternControlPanel(QtWidgets.QGroupBox):
         self.screen.setCurrentIndex(max(0, index))
 
     def settings(self) -> PatternSettings:
+        family = str(self.family.currentData())
+        mode = str(self.mode.currentData())
+        if family in {"speckle", "solid"}:
+            mode = "static"
         return PatternSettings(
-            family=str(self.family.currentData()),
+            family=family,
             period_px=self.period.value(),
             angle_deg=self.angle.value(),
             phase_deg=self.phase.value(),
             brightness=float(self.brightness.value()),
+            duty_percent=self.duty.value(),
+            squircle_power=self.squircle_power.value(),
+            spiral_arms=self.spiral_arms.value(),
+            spiral_width_percent=self.spiral_width.value(),
+            spokes=self.spokes.value(),
+            speckle_size_px=self.speckle_size.value(),
+            seed=self.seed.value(),
             invert=self.invert.isChecked(),
             waveform=str(self.waveform.currentData()),
-            mode=str(self.mode.currentData()),
+            mode=mode,
             speed_deg_s=self.speed.value(),
             step_deg=self.step_size.value(),
             render_scale=float(self.render_scale.currentData()),
@@ -468,20 +548,48 @@ class PatternControlPanel(QtWidgets.QGroupBox):
         self.output.set_settings(self.settings())
 
     def _update_context(self) -> None:
+        family = str(self.family.currentData())
         mode = str(self.mode.currentData())
-        continuous = mode == "continuous"
-        stepped = mode == "step"
-        self.speed.setVisible(continuous)
-        self.animation_fps.setVisible(continuous)
-        self.step_size.setVisible(stepped)
+        animatable = family not in {"speckle", "solid"}
+        continuous = animatable and mode == "continuous"
+        stepped = animatable and mode == "step"
+
+        visibility = {
+            self.period: family not in {"starburst", "speckle", "solid"},
+            self.waveform: family in {"stripes", "rings", "composite"},
+            self.angle: family
+            in {
+                "stripes",
+                "checker",
+                "composite",
+                "nested_square",
+                "squircle",
+                "spiral",
+                "counter_spiral",
+                "starburst",
+            },
+            self.phase: family not in {"speckle", "solid"},
+            self.duty: family
+            in {"stripes", "rings", "nested_square", "squircle"},
+            self.squircle_power: family == "squircle",
+            self.spiral_arms: family in {"spiral", "counter_spiral"},
+            self.spiral_width: family in {"spiral", "counter_spiral"},
+            self.spokes: family == "starburst",
+            self.speckle_size: family == "speckle",
+            self.seed: family == "speckle",
+            self.mode: animatable,
+            self.speed: continuous,
+            self.animation_fps: continuous,
+            self.step_size: stepped,
+        }
+
+        for editor, visible in visibility.items():
+            editor.setVisible(visible)
         self.step_button.setVisible(stepped)
+
         layout = self.layout()
         if isinstance(layout, QtWidgets.QFormLayout):
-            for editor, visible in (
-                (self.speed, continuous),
-                (self.animation_fps, continuous),
-                (self.step_size, stepped),
-            ):
+            for editor, visible in visibility.items():
                 label = layout.labelForField(editor)
                 if label is not None:
                     label.setVisible(visible)
