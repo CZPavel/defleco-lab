@@ -140,8 +140,8 @@ def _phase_group(family: str, period: float, values: list[float]) -> list[Patter
                 family=family,
                 period_px=period,
                 phase_deg=phase,
-                mode="static",
-                waveform="binary",
+                mode="step",
+                waveform="sinusoidal" if family == "rings" else "binary",
             ),
         )
         for index, phase in enumerate(values)
