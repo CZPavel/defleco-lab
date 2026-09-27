@@ -55,3 +55,14 @@ def test_sinusoidal_pattern_contains_intermediate_gray_levels() -> None:
     # Integer pixel sampling of a 24 px sine contains repeated symmetric levels,
     # but it must remain a genuine multi-level carrier rather than a binary pattern.
     assert len(np.unique(image)) > 8
+
+
+def test_radial_pattern_is_orientation_agnostic_in_portrait_geometry() -> None:
+    settings = PatternSettings(family="rings", period_px=24, waveform="sinusoidal")
+    portrait = render_pattern(216, 384, settings)
+    landscape = render_pattern(384, 216, settings)
+    assert portrait.shape == (384, 216)
+    assert landscape.shape == (216, 384)
+    # Rings depend only on radius from the image centre, so swapping width/height
+    # must only transpose the image. This catches accidental landscape assumptions.
+    assert np.array_equal(portrait.T, landscape)
