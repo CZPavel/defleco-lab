@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections import deque
+from datetime import datetime
 from importlib.resources import files
 from pathlib import Path
 from time import perf_counter
@@ -13,11 +14,13 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from defleco_lab.camera.basler_source import discover_cameras
 from defleco_lab.camera.image_sequence_source import load_image_sequence
 from defleco_lab.camera.synthetic_source import SyntheticSource
+from defleco_lab.experiments import ScreeningProcessingWorker, build_pattern_cases
 from defleco_lab.processing.registry import registry
 from defleco_lab.runtime.acquisition_worker import BaslerAcquisitionWorker
 from defleco_lab.runtime.processing_worker import ProcessingRequest, ProcessingWorker
 from defleco_lab.sessions import AsyncSessionRecorder, load_session, replay_history
 
+from .experiment_panel import ExperimentPanel
 from .image_viewer import ImageViewer
 from .parameter_panel import ParameterPanel
 from .pattern_output import PatternControlPanel
@@ -54,6 +57,19 @@ class MainWindow(QtWidgets.QMainWindow):
         self._source_times: deque[float] = deque(maxlen=120)
         self._processed_times: deque[float] = deque(maxlen=120)
         self.camera_metrics: dict[str, float | int] = {}
+        self._experiment_cases = []
+        self._experiment_records: list[dict] = []
+        self._experiment_index = -1
+        self._experiment_root: Path | None = None
+        self._experiment_baseline_frame_id: int | None = None
+        self._experiment_case_started = 0.0
+        self._experiment_settle_ms = 250
+        self._experiment_auto_process = True
+        self._experiment_profile = "quick"
+        self._experiment_processing_worker: ScreeningProcessingWorker | None = None
+        self.experiment_timer = QtCore.QTimer(self)
+        self.experiment_timer.setInterval(30)
+        self.experiment_timer.timeout.connect(self._experiment_poll)
         self.timer = QtCore.QTimer(self)
         self.timer.setInterval(60)
         self.timer.timeout.connect(self._next_frame)
@@ -186,6 +202,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.pattern_output = PatternControlPanel()
         pattern_dock.setWidget(self.pattern_output)
         self.addDockWidget(QtCore.Qt.DockWidgetArea.LeftDockWidgetArea, pattern_dock)
+
+        experiment_dock = QtWidgets.QDockWidget("Screening experiment", self)
+        self.experiment = ExperimentPanel()
+        self.experiment.captureRequested.connect(self._run_capture_experiment)
+        self.experiment.processRequested.connect(self._start_offline_processing)
+        self.experiment.stopRequested.connect(self._stop_experiment)
+        experiment_dock.setWidget(self.experiment)
+        self.addDockWidget(QtCore.Qt.DockWidgetArea.LeftDockWidgetArea, experiment_dock)
 
         right = QtWidgets.QDockWidget("Analysis pipeline", self)
         scroll = QtWidgets.QScrollArea()
@@ -467,6 +491,7 @@ class MainWindow(QtWidgets.QMainWindow):
         return True
 
     def closeEvent(self, event):
+        self._stop_experiment()
         self.pattern_output.shutdown()
         if not self._stop():
             self.statusBar().showMessage(
@@ -483,6 +508,179 @@ class MainWindow(QtWidgets.QMainWindow):
             event.ignore()
             return
         event.accept()
+
+    @QtCore.Slot(object)
+    def _run_capture_experiment(self, config: dict) -> None:
+        if self.source_combo.currentText() != "Basler":
+            self.experiment.failed("Select Basler as Source and start Live acquisition first.")
+            return
+        if self.camera_worker is None or not self.camera_worker.isRunning():
+            self.experiment.failed("Basler camera is not running. Press Live first.")
+            return
+        if not self.history:
+            self.experiment.failed("No camera frame is available yet.")
+            return
+
+        parent = Path(str(config.get("parent", ""))).expanduser()
+        if not parent:
+            self.experiment.failed("Choose an experiment parent folder.")
+            return
+        parent.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        root = parent / f"Defleco_screening_{stamp}"
+        root.mkdir(parents=True, exist_ok=False)
+        (root / "raw").mkdir()
+
+        self._experiment_profile = str(config.get("profile", "quick"))
+        self._experiment_cases = build_pattern_cases(self._experiment_profile)
+        self._experiment_records = []
+        self._experiment_index = -1
+        self._experiment_root = root
+        self._experiment_settle_ms = max(50, int(config.get("settle_ms", 250)))
+        self._experiment_auto_process = bool(config.get("auto_process", True))
+        self.tabs.setCurrentIndex(0)
+        self.experiment.set_running(True)
+        self.experiment.progress.setValue(0)
+        self._write_capture_manifest(status="capturing")
+        self._experiment_next_case()
+
+    def _experiment_next_case(self) -> None:
+        if not self._experiment_cases or self._experiment_root is None:
+            return
+        self._experiment_index += 1
+        if self._experiment_index >= len(self._experiment_cases):
+            self._finish_capture_experiment()
+            return
+
+        case = self._experiment_cases[self._experiment_index]
+        self.pattern_output.output.set_settings(case.settings)
+        if not self.pattern_output.output.isVisible():
+            screen = self.pattern_output.screen.currentData()
+            self.pattern_output.output.show_on_screen(0 if screen is None else int(screen))
+
+        self._experiment_baseline_frame_id = (
+            self.history[-1].frame_id if self.history else None
+        )
+        self._experiment_case_started = perf_counter()
+        self.experiment.update_progress(
+            self._experiment_index,
+            len(self._experiment_cases),
+            f"Settling pattern {self._experiment_index + 1}/{len(self._experiment_cases)}: "
+            f"{case.case_id}",
+        )
+        self.experiment_timer.start()
+
+    def _experiment_poll(self) -> None:
+        if self._experiment_root is None or self._experiment_index < 0:
+            self.experiment_timer.stop()
+            return
+        if not self.history:
+            return
+
+        elapsed_ms = (perf_counter() - self._experiment_case_started) * 1000.0
+        if elapsed_ms < self._experiment_settle_ms:
+            return
+
+        packet = self.history[-1]
+        if packet.frame_id == self._experiment_baseline_frame_id:
+            if elapsed_ms > max(5000.0, self._experiment_settle_ms + 3000.0):
+                self.experiment_timer.stop()
+                self.experiment.failed("Timed out waiting for a new camera frame.")
+                self._write_capture_manifest(status="error")
+            return
+
+        self.experiment_timer.stop()
+        case = self._experiment_cases[self._experiment_index]
+        raw_name = f"raw/{case.case_id}.png"
+        raw_path = self._experiment_root / raw_name
+        if not cv2.imwrite(str(raw_path), packet.image):
+            self.experiment.failed(f"Could not save {raw_path}")
+            self._write_capture_manifest(status="error")
+            return
+
+        record = case.as_dict()
+        record["raw_file"] = raw_name
+        record["frame"] = packet.public_metadata()
+        self._experiment_records.append(record)
+        self._write_capture_manifest(status="capturing")
+        self._experiment_next_case()
+
+    def _write_capture_manifest(self, status: str) -> None:
+        if self._experiment_root is None:
+            return
+        payload = {
+            "version": 1,
+            "status": status,
+            "profile": self._experiment_profile,
+            "settle_ms": self._experiment_settle_ms,
+            "captured_count": len(self._experiment_records),
+            "planned_count": len(self._experiment_cases),
+            "captures": self._experiment_records,
+        }
+        (self._experiment_root / "capture_manifest.json").write_text(
+            json.dumps(payload, indent=2), encoding="utf-8"
+        )
+
+    def _finish_capture_experiment(self) -> None:
+        self.experiment_timer.stop()
+        self.pattern_output.output.hide_output()
+        self._write_capture_manifest(status="captured")
+        root = self._experiment_root
+        self.experiment.update_progress(
+            len(self._experiment_records),
+            max(1, len(self._experiment_cases)),
+            f"Captured {len(self._experiment_records)} RAW pattern cases.",
+        )
+        if root is not None and self._experiment_auto_process:
+            self._start_offline_processing(str(root))
+        elif root is not None:
+            self.experiment.finished(f"Capture complete: {root}")
+
+    @QtCore.Slot(str)
+    def _start_offline_processing(self, folder: str) -> None:
+        root = Path(folder)
+        if not (root / "capture_manifest.json").exists():
+            self.experiment.failed("capture_manifest.json was not found.")
+            return
+        if (
+            self._experiment_processing_worker is not None
+            and self._experiment_processing_worker.isRunning()
+        ):
+            self.experiment.failed("A screening processing job is already running.")
+            return
+
+        self.experiment.set_running(True)
+        worker = ScreeningProcessingWorker(root, self)
+        self._experiment_processing_worker = worker
+        worker.progressChanged.connect(self.experiment.update_progress)
+        worker.completed.connect(self._experiment_processing_complete)
+        worker.failed.connect(self._experiment_processing_failed)
+        worker.start()
+
+    @QtCore.Slot(str)
+    def _experiment_processing_complete(self, manifest: str) -> None:
+        self.experiment.finished(f"Screening results saved: {manifest}")
+        self.statusBar().showMessage("Automated screening processing complete")
+        self._experiment_processing_worker = None
+
+    @QtCore.Slot(str)
+    def _experiment_processing_failed(self, message: str) -> None:
+        self.experiment.failed(message)
+        self.statusBar().showMessage(f"Screening processing: {message}")
+        self._experiment_processing_worker = None
+
+    def _stop_experiment(self) -> None:
+        if self.experiment_timer.isActive():
+            self.experiment_timer.stop()
+            self._write_capture_manifest(status="cancelled")
+            self.pattern_output.output.hide_output()
+            self.experiment.failed("Capture cancelled; already saved RAW cases were preserved.")
+        worker = self._experiment_processing_worker
+        if worker is not None and worker.isRunning():
+            worker.cancel()
+            self.experiment.status.setText("Stopping offline processing...")
+        self._experiment_cases = []
+        self._experiment_index = -1
 
     def _poll_camera_frames(self) -> None:
         """Drain the bounded camera mailbox and process only the newest display frame."""
