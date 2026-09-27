@@ -34,7 +34,7 @@ class VisualizationSettings:
     manual_maximum: float = 1.0
     heatmap: bool = True
     colormap: str = "Turbo"
-    overlay_alpha: float = 1.0
+    overlay_alpha: float = 0.5
     lock_range: bool = False
 
 
@@ -161,7 +161,7 @@ class VisualizationPanel(QtWidgets.QGroupBox):
     compareReferenceRequested = QtCore.Signal()
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
-        super().__init__("Response visualization", parent)
+        super().__init__("4. Display / overlay", parent)
         form = QtWidgets.QFormLayout(self)
         self.range_mode = QtWidgets.QComboBox()
         self.range_mode.addItems([mode.value for mode in RangeMode])
@@ -170,14 +170,20 @@ class VisualizationPanel(QtWidgets.QGroupBox):
         self.high_percentile = _double_spin(0.0, 100.0, 1.0, 2, 99.0)
         self.manual_minimum = _double_spin(-1e12, 1e12, 0.1, 6, 0.0)
         self.manual_maximum = _double_spin(-1e12, 1e12, 0.1, 6, 1.0)
-        self.heatmap = QtWidgets.QCheckBox("Enabled")
+        self.heatmap = QtWidgets.QCheckBox("Colour map")
         self.heatmap.setChecked(True)
+        self.heatmap.setToolTip(
+            "Display-only. Disable for grayscale; the numerical response is unchanged."
+        )
         self.colormap = QtWidgets.QComboBox()
         self.colormap.addItems(COLORMAPS)
         self.alpha = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
         self.alpha.setRange(0, 100)
-        self.alpha.setValue(100)
-        self.alpha.setToolTip("0% shows the original; 100% shows the response")
+        self.alpha.setValue(50)
+        self.alpha.setToolTip(
+            "Display-only overlay: 0% shows the camera image, 100% shows only the response. "
+            "50% is a useful starting point for relating a response to the body surface."
+        )
         self.lock_range = QtWidgets.QCheckBox("Use the same range for comparisons")
         self.reset_button = QtWidgets.QPushButton("Reset display range")
         self.compare_button = QtWidgets.QPushButton("Set current as compare reference")
@@ -186,7 +192,7 @@ class VisualizationPanel(QtWidgets.QGroupBox):
         form.addRow("High percentile", self.high_percentile)
         form.addRow("Manual minimum", self.manual_minimum)
         form.addRow("Manual maximum", self.manual_maximum)
-        form.addRow("Heatmap", self.heatmap)
+        form.addRow("Response display", self.heatmap)
         form.addRow("Colormap", self.colormap)
         form.addRow("Response alpha", self.alpha)
         form.addRow(self.lock_range)

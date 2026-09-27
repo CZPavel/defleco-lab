@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections import deque
+from datetime import datetime
 from importlib.resources import files
 from pathlib import Path
 from time import perf_counter
@@ -13,13 +14,17 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from defleco_lab.camera.basler_source import discover_cameras
 from defleco_lab.camera.image_sequence_source import load_image_sequence
 from defleco_lab.camera.synthetic_source import SyntheticSource
+from defleco_lab.experiments import ScreeningProcessingWorker, build_pattern_cases
 from defleco_lab.processing.registry import registry
 from defleco_lab.runtime.acquisition_worker import BaslerAcquisitionWorker
 from defleco_lab.runtime.processing_worker import ProcessingRequest, ProcessingWorker
 from defleco_lab.sessions import AsyncSessionRecorder, load_session, replay_history
 
+from .experiment_panel import ExperimentPanel
 from .image_viewer import ImageViewer
 from .parameter_panel import ParameterPanel
+from .pattern_output import PatternControlPanel
+from .pipeline_panel import PostprocessingPanel, PreprocessingPanel
 from .visualization import VisualizationPanel, VisualizationSettings, VisualizationTransform
 
 
@@ -52,6 +57,19 @@ class MainWindow(QtWidgets.QMainWindow):
         self._source_times: deque[float] = deque(maxlen=120)
         self._processed_times: deque[float] = deque(maxlen=120)
         self.camera_metrics: dict[str, float | int] = {}
+        self._experiment_cases = []
+        self._experiment_records: list[dict] = []
+        self._experiment_index = -1
+        self._experiment_root: Path | None = None
+        self._experiment_baseline_frame_id: int | None = None
+        self._experiment_case_started = 0.0
+        self._experiment_settle_ms = 250
+        self._experiment_auto_process = True
+        self._experiment_profile = "quick"
+        self._experiment_processing_worker: ScreeningProcessingWorker | None = None
+        self.experiment_timer = QtCore.QTimer(self)
+        self.experiment_timer.setInterval(30)
+        self.experiment_timer.timeout.connect(self._experiment_poll)
         self.timer = QtCore.QTimer(self)
         self.timer.setInterval(60)
         self.timer.timeout.connect(self._next_frame)
@@ -134,23 +152,15 @@ class MainWindow(QtWidgets.QMainWindow):
         camera_row.addWidget(self.camera_combo)
         camera_row.addWidget(discover)
         form.addRow("Explicit camera", camera_row)
-        self.camera_settings = {}
-        for label, node in (
-            ("Exposure us", "ExposureTime"),
-            ("Gain", "Gain"),
-            ("FPS", "AcquisitionFrameRate"),
-            ("Width", "Width"),
-            ("Height", "Height"),
-            ("Offset X", "OffsetX"),
-            ("Offset Y", "OffsetY"),
-        ):
-            editor = QtWidgets.QLineEdit()
-            editor.setPlaceholderText("leave unchanged")
-            editor.setToolTip(
-                "Optional session-only value; applied with GenICam writability and readback checks"
-            )
-            form.addRow(label, editor)
-            self.camera_settings[node] = editor
+        self.camera_status = QtWidgets.QLabel(
+            "Camera image acquisition only. Configure exposure, gain, ROI and other "
+            "camera parameters in Basler pylon Viewer."
+        )
+        self.camera_status.setWordWrap(True)
+        self.camera_status.setToolTip(
+            "Defleco LAB intentionally does not duplicate pylon camera-parameter controls."
+        )
+        form.addRow(self.camera_status)
         self.pattern = QtWidgets.QComboBox()
         self.pattern.addItems(["fringes", "checker", "grid", "speckle"])
         self.pattern.currentTextChanged.connect(self._change_pattern)
@@ -188,31 +198,73 @@ class MainWindow(QtWidgets.QMainWindow):
         left.setWidget(panel)
         self.addDockWidget(QtCore.Qt.DockWidgetArea.LeftDockWidgetArea, left)
 
-        right = QtWidgets.QDockWidget("Method / Parameters", self)
+        pattern_dock = QtWidgets.QDockWidget("Pattern generator", self)
+        self.pattern_output = PatternControlPanel()
+        pattern_dock.setWidget(self.pattern_output)
+        self.addDockWidget(QtCore.Qt.DockWidgetArea.LeftDockWidgetArea, pattern_dock)
+
+        experiment_dock = QtWidgets.QDockWidget("Screening experiment", self)
+        self.experiment = ExperimentPanel()
+        self.experiment.captureRequested.connect(self._run_capture_experiment)
+        self.experiment.processRequested.connect(self._start_offline_processing)
+        self.experiment.stopRequested.connect(self._stop_experiment)
+        experiment_dock.setWidget(self.experiment)
+        self.addDockWidget(QtCore.Qt.DockWidgetArea.LeftDockWidgetArea, experiment_dock)
+
+        right = QtWidgets.QDockWidget("Analysis pipeline", self)
         scroll = QtWidgets.QScrollArea()
         scroll.setWidgetResizable(True)
         rp = QtWidgets.QWidget()
         rform = QtWidgets.QVBoxLayout(rp)
+
+        self.preprocessing = PreprocessingPanel()
+        rform.addWidget(self.preprocessing)
+
+        method_group = QtWidgets.QGroupBox("2. Analysis method")
+        method_layout = QtWidgets.QVBoxLayout(method_group)
+        method_hint = QtWidgets.QLabel(
+            "Only parameters used by the selected method are shown. Hover a control "
+            "for a short explanation."
+        )
+        method_hint.setWordWrap(True)
+        method_layout.addWidget(method_hint)
+
         self.method_combo = QtWidgets.QComboBox()
         self.method_combo.currentIndexChanged.connect(self._method_changed)
-        rform.addWidget(self.method_combo)
+        method_layout.addWidget(self.method_combo)
         self.preset_combo = QtWidgets.QComboBox()
         self.preset_combo.addItem("Custom")
         self._load_presets()
         self.preset_combo.currentIndexChanged.connect(self._preset_changed)
-        rform.addWidget(self.preset_combo)
-        options = QtWidgets.QFormLayout()
+        method_layout.addWidget(self.preset_combo)
+
+        self.method_options = QtWidgets.QFormLayout()
         self.stride = QtWidgets.QSpinBox()
         self.stride.setRange(1, 16)
-        self.scale = QtWidgets.QComboBox()
-        self.scale.addItems(["100%", "50%", "25%"])
-        self.scale.setToolTip(
-            "Downscales frames before processing. Method parameters expressed in px "
-            "refer to the processed image grid, so keep scale fixed when comparing "
-            "parameter values across pattern experiments."
+        self.stride.setToolTip(
+            "Frame spacing used only by multi-frame methods. 1 means adjacent frames."
         )
-        self.comp = QtWidgets.QCheckBox("Enable one-axis compensation")
         self.analysis_only = QtWidgets.QCheckBox("Process enabled Analysis ROIs only")
+        self.analysis_only.setToolTip(
+            "Restrict numerical output to manually drawn Analysis ROIs."
+        )
+        self.method_options.addRow("Frame stride", self.stride)
+        self.method_options.addRow(self.analysis_only)
+        method_layout.addLayout(self.method_options)
+
+        self.params = ParameterPanel()
+        method_layout.addWidget(self.params)
+        rform.addWidget(method_group)
+
+        self.motion_group = QtWidgets.QGroupBox("Motion compensation (advanced)")
+        motion_form = QtWidgets.QFormLayout(self.motion_group)
+        motion_hint = QtWidgets.QLabel(
+            "Use only when the vehicle/object moves between frames. For the current "
+            "static-car experiments this can stay disabled."
+        )
+        motion_hint.setWordWrap(True)
+        motion_form.addRow(motion_hint)
+        self.comp = QtWidgets.QCheckBox("Enable one-axis compensation")
         self.motion_axis = QtWidgets.QComboBox()
         self.motion_axis.addItems(["x", "y"])
         self.motion_mode = QtWidgets.QComboBox()
@@ -235,35 +287,45 @@ class MainWindow(QtWidgets.QMainWindow):
         self.max_shift = QtWidgets.QDoubleSpinBox()
         self.max_shift.setRange(0.1, 10000)
         self.max_shift.setValue(50.0)
-        options.addRow("Frame stride", self.stride)
-        options.addRow("Processing scale", self.scale)
-        options.addRow(self.comp)
-        options.addRow(self.analysis_only)
-        options.addRow("Motion axis", self.motion_axis)
-        options.addRow("Motion mode", self.motion_mode)
-        options.addRow("Manual px/frame", self.manual_shift)
-        options.addRow("Motion preprocessing", self.motion_preprocessing)
-        options.addRow("Minimum texture", self.minimum_texture)
-        options.addRow("Minimum Q", self.minimum_q)
-        options.addRow("Deadband px", self.motion_deadband)
-        options.addRow("Maximum shift px", self.max_shift)
-        rform.addLayout(options)
-        self.params = ParameterPanel()
-        rform.addWidget(self.params)
+        motion_form.addRow(self.comp)
+        motion_form.addRow("Motion axis", self.motion_axis)
+        motion_form.addRow("Motion mode", self.motion_mode)
+        motion_form.addRow("Manual px/frame", self.manual_shift)
+        motion_form.addRow("Motion preprocessing", self.motion_preprocessing)
+        motion_form.addRow("Minimum texture", self.minimum_texture)
+        motion_form.addRow("Minimum Q", self.minimum_q)
+        motion_form.addRow("Deadband px", self.motion_deadband)
+        motion_form.addRow("Maximum shift px", self.max_shift)
+        reset_motion = QtWidgets.QPushButton("Reset motion position")
+        reset_motion.clicked.connect(self._reset_motion_position)
+        motion_form.addRow(reset_motion)
+        rform.addWidget(self.motion_group)
+
+        self.postprocessing = PostprocessingPanel()
+        rform.addWidget(self.postprocessing)
+
         self.visualization = VisualizationPanel()
         self.visualization.settingsChanged.connect(self._visualization_changed)
         self.visualization.rangeReset.connect(self.visualization_transform.reset_range)
         self.visualization.compareReferenceRequested.connect(self._set_compare_reference)
         rform.addWidget(self.visualization)
-        apply = QtWidgets.QPushButton("Apply / Process")
+
+        apply = QtWidgets.QPushButton("Apply / Process current frame")
+        apply.setToolTip(
+            "Recalculate the current frozen/replay frame. During live acquisition "
+            "new frames automatically use the current settings."
+        )
         apply.clicked.connect(self._process)
         rform.addWidget(apply)
-        reset_motion = QtWidgets.QPushButton("Reset motion position")
-        reset_motion.clicked.connect(self._reset_motion_position)
-        rform.addWidget(reset_motion)
+
+        help_group = QtWidgets.QGroupBox("Help for selected method")
+        help_layout = QtWidgets.QVBoxLayout(help_group)
         self.help = QtWidgets.QTextBrowser()
-        self.help.setMinimumHeight(240)
-        rform.addWidget(self.help)
+        self.help.setMinimumHeight(220)
+        help_layout.addWidget(self.help)
+        rform.addWidget(help_group)
+        rform.addStretch(1)
+
         scroll.setWidget(rp)
         right.setWidget(scroll)
         self.addDockWidget(QtCore.Qt.DockWidgetArea.RightDockWidgetArea, right)
@@ -309,8 +371,21 @@ class MainWindow(QtWidgets.QMainWindow):
             {key: value for key, value in info.parameters.items() if key != "stride"}
         )
         self.help.setMarkdown(
-            f"### {info.name}\n\n{info.description}\n\n**Frames:** {info.required_frames}\n\n**Recommended use:** {info.recommended_use or 'Exploratory comparison.'}\n\n**Limitations:** {info.limitations or 'Scene-dependent; not a metrological result.'}\n\n**Motion compensation:** {'supported' if info.supports_motion_compensation else 'not normally required'}\n\n**References:** {', '.join(info.references) if info.references else 'See docs/references.md.'}"
+            f"### {info.name}\n\n{info.description}\n\n"
+            f"**Frames:** {info.required_frames}\n\n"
+            f"**Recommended use:** {info.recommended_use or 'Exploratory comparison.'}\n\n"
+            f"**Limitations:** {info.limitations or 'Scene-dependent; not a metrological result.'}\n\n"
+            f"**Motion compensation:** {'supported' if info.supports_motion_compensation else 'not normally required'}\n\n"
+            "**Tip:** Start from default parameters. Change one family of settings at a time "
+            "and use recorded frames when comparing methods.\n\n"
+            f"**References:** {', '.join(info.references) if info.references else 'See docs/references.md.'}"
         )
+        multi_frame = info.required_frames > 1 or "stride" in info.parameters
+        self.stride.setVisible(multi_frame)
+        stride_label = self.method_options.labelForField(self.stride)
+        if stride_label is not None:
+            stride_label.setVisible(multi_frame)
+        self.motion_group.setVisible(info.supports_motion_compensation)
         if self.replay:
             self._seek_absolute(self.slider.value())
         else:
@@ -324,7 +399,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if idx >= 0:
             self.method_combo.setCurrentIndex(idx)
         self.stride.setValue(int(p.get("frame_stride", 1)))
-        self.scale.setCurrentText(f"{int(p.get('processing_scale', 1) * 100)}%")
+        self.preprocessing.set_processing_scale(float(p.get("processing_scale", 1)))
         self.comp.setChecked(bool(p.get("motion_compensation", False)))
         if "motion_mode" in p:
             self.motion_mode.setCurrentText(str(p["motion_mode"]))
@@ -365,16 +440,9 @@ class MainWindow(QtWidgets.QMainWindow):
             if descriptor is None:
                 self.statusBar().showMessage("Discover and explicitly select a camera first")
                 return
-            temporary = {}
-            for node, editor in self.camera_settings.items():
-                text = editor.text().strip()
-                if text:
-                    temporary[node] = (
-                        int(float(text))
-                        if node in {"Width", "Height", "OffsetX", "OffsetY"}
-                        else float(text)
-                    )
-            self.camera_worker = BaslerAcquisitionWorker(descriptor, temporary, self)
+            # Camera parameters are intentionally configured in pylon Viewer.
+            # Defleco LAB only owns acquisition for the experiment.
+            self.camera_worker = BaslerAcquisitionWorker(descriptor, {}, self)
             self.camera_worker.failed.connect(self._camera_failed)
             self.camera_worker.metricsReady.connect(self._camera_metrics)
             self.camera_worker.restoreReport.connect(self._camera_restored)
@@ -423,6 +491,8 @@ class MainWindow(QtWidgets.QMainWindow):
         return True
 
     def closeEvent(self, event):
+        self._stop_experiment()
+        self.pattern_output.shutdown()
         if not self._stop():
             self.statusBar().showMessage(
                 "Camera worker did not stop cleanly; close postponed to protect camera state"
@@ -438,6 +508,205 @@ class MainWindow(QtWidgets.QMainWindow):
             event.ignore()
             return
         event.accept()
+
+    @QtCore.Slot(object)
+    def _run_capture_experiment(self, config: dict) -> None:
+        if self.source_combo.currentText() != "Basler":
+            self.experiment.failed("Select Basler as Source and start Live acquisition first.")
+            return
+        if self.camera_worker is None or not self.camera_worker.isRunning():
+            self.experiment.failed("Basler camera is not running. Press Live first.")
+            return
+        if not self.history:
+            self.experiment.failed("No camera frame is available yet.")
+            return
+
+        parent_text = str(config.get("parent", "")).strip()
+        if not parent_text:
+            self.experiment.failed("Choose an experiment parent folder.")
+            return
+        parent = Path(parent_text).expanduser()
+        parent.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S_%f")
+        root = parent / f"Defleco_screening_{stamp}"
+        root.mkdir(parents=True, exist_ok=False)
+        (root / "raw").mkdir()
+
+        self._experiment_profile = str(config.get("profile", "quick"))
+        self._experiment_cases = build_pattern_cases(self._experiment_profile)
+        self._experiment_records = []
+        self._experiment_index = -1
+        self._experiment_root = root
+        self._experiment_settle_ms = max(50, int(config.get("settle_ms", 250)))
+        self._experiment_auto_process = bool(config.get("auto_process", True))
+        self.tabs.setCurrentIndex(0)
+        self.experiment.set_running(True)
+        self.experiment.progress.setValue(0)
+        self._write_capture_manifest(status="capturing")
+        self._experiment_next_case()
+
+    def _experiment_next_case(self) -> None:
+        if not self._experiment_cases or self._experiment_root is None:
+            return
+        self._experiment_index += 1
+        if self._experiment_index >= len(self._experiment_cases):
+            self._finish_capture_experiment()
+            return
+
+        case = self._experiment_cases[self._experiment_index]
+        self.pattern_output.output.set_settings(case.settings)
+        if not self.pattern_output.output.isVisible():
+            screen = self.pattern_output.screen.currentData()
+            self.pattern_output.output.show_on_screen(0 if screen is None else int(screen))
+
+        self._experiment_baseline_frame_id = (
+            self.history[-1].frame_id if self.history else None
+        )
+        self._experiment_case_started = perf_counter()
+        self.experiment.update_progress(
+            self._experiment_index,
+            len(self._experiment_cases),
+            f"Settling pattern {self._experiment_index + 1}/{len(self._experiment_cases)}: "
+            f"{case.case_id}",
+        )
+        self.experiment_timer.start()
+
+    def _experiment_poll(self) -> None:
+        if self._experiment_root is None or self._experiment_index < 0:
+            self.experiment_timer.stop()
+            return
+        if not self.history:
+            return
+
+        elapsed_ms = (perf_counter() - self._experiment_case_started) * 1000.0
+        if elapsed_ms < self._experiment_settle_ms:
+            return
+
+        packet = self.history[-1]
+        if packet.frame_id == self._experiment_baseline_frame_id:
+            if elapsed_ms > max(5000.0, self._experiment_settle_ms + 3000.0):
+                self.experiment_timer.stop()
+                self.experiment.failed("Timed out waiting for a new camera frame.")
+                self._write_capture_manifest(status="error")
+            return
+
+        self.experiment_timer.stop()
+        case = self._experiment_cases[self._experiment_index]
+        raw_name = f"raw/{case.case_id}.png"
+        raw_path = self._experiment_root / raw_name
+        if not cv2.imwrite(str(raw_path), packet.image):
+            self.experiment.failed(f"Could not save {raw_path}")
+            self._write_capture_manifest(status="error")
+            return
+
+        record = case.as_dict()
+        record["raw_file"] = raw_name
+        record["frame"] = packet.public_metadata()
+        record["capture_delay_ms"] = round(elapsed_ms, 3)
+        self._experiment_records.append(record)
+        self._write_capture_manifest(status="capturing")
+        self._experiment_next_case()
+
+    def _write_capture_manifest(self, status: str) -> None:
+        if self._experiment_root is None:
+            return
+        screens = QtGui.QGuiApplication.screens()
+        screen_index = self.pattern_output.screen.currentData()
+        display = None
+        if screens:
+            index = 0 if screen_index is None else max(0, min(int(screen_index), len(screens) - 1))
+            screen = screens[index]
+            geometry = screen.geometry()
+            display = {
+                "index": index,
+                "name": screen.name(),
+                "width": geometry.width(),
+                "height": geometry.height(),
+                "refresh_hz_reported": round(float(screen.refreshRate()), 3),
+            }
+        payload = {
+            "version": 1,
+            "status": status,
+            "profile": self._experiment_profile,
+            "settle_ms": self._experiment_settle_ms,
+            "display": display,
+            "captured_count": len(self._experiment_records),
+            "planned_count": len(self._experiment_cases),
+            "captures": self._experiment_records,
+        }
+        (self._experiment_root / "capture_manifest.json").write_text(
+            json.dumps(payload, indent=2), encoding="utf-8"
+        )
+
+    def _finish_capture_experiment(self) -> None:
+        self.experiment_timer.stop()
+        self.pattern_output.output.hide_output()
+        self._write_capture_manifest(status="captured")
+        root = self._experiment_root
+        self.experiment.update_progress(
+            len(self._experiment_records),
+            max(1, len(self._experiment_cases)),
+            f"Captured {len(self._experiment_records)} RAW pattern cases.",
+        )
+        if root is not None and self._experiment_auto_process:
+            self._start_offline_processing(str(root))
+        elif root is not None:
+            self.experiment.finished(f"Capture complete: {root}")
+
+    @QtCore.Slot(str)
+    def _start_offline_processing(self, folder: str) -> None:
+        root = Path(folder)
+        if not (root / "capture_manifest.json").exists():
+            self.experiment.failed("capture_manifest.json was not found.")
+            return
+        if (
+            self._experiment_processing_worker is not None
+            and self._experiment_processing_worker.isRunning()
+        ):
+            self.experiment.failed("A screening processing job is already running.")
+            return
+
+        self.experiment.set_running(True)
+        worker = ScreeningProcessingWorker(root, self)
+        self._experiment_processing_worker = worker
+        worker.progressChanged.connect(self.experiment.update_progress)
+        worker.completed.connect(self._experiment_processing_complete)
+        worker.cancelled.connect(self._experiment_processing_cancelled)
+        worker.failed.connect(self._experiment_processing_failed)
+        worker.start()
+
+    @QtCore.Slot(str)
+    def _experiment_processing_complete(self, manifest: str) -> None:
+        gallery = Path(manifest).parent / "screening_results.html"
+        self.experiment.set_results_path(str(gallery))
+        self.experiment.finished(f"Screening results ready: {gallery}")
+        self.statusBar().showMessage("Automated screening processing complete")
+        self._experiment_processing_worker = None
+
+    @QtCore.Slot()
+    def _experiment_processing_cancelled(self) -> None:
+        self.experiment.finished("Offline processing cancelled; captured RAW data were preserved.")
+        self.statusBar().showMessage("Screening processing cancelled")
+        self._experiment_processing_worker = None
+
+    @QtCore.Slot(str)
+    def _experiment_processing_failed(self, message: str) -> None:
+        self.experiment.failed(message)
+        self.statusBar().showMessage(f"Screening processing: {message}")
+        self._experiment_processing_worker = None
+
+    def _stop_experiment(self) -> None:
+        if self.experiment_timer.isActive():
+            self.experiment_timer.stop()
+            self._write_capture_manifest(status="cancelled")
+            self.pattern_output.output.hide_output()
+            self.experiment.failed("Capture cancelled; already saved RAW cases were preserved.")
+        worker = self._experiment_processing_worker
+        if worker is not None and worker.isRunning():
+            worker.cancel()
+            self.experiment.status.setText("Stopping offline processing...")
+        self._experiment_cases = []
+        self._experiment_index = -1
 
     def _poll_camera_frames(self) -> None:
         """Drain the bounded camera mailbox and process only the newest display frame."""
@@ -523,6 +792,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.camera_metrics = dict(metrics)
         if self.source_combo.currentText() == "Basler":
             self.received_fps = float(metrics.get("received_fps", 0.0))
+            descriptor = self.camera_combo.currentData()
+            label = descriptor.label if descriptor is not None else "Basler"
+            self.camera_status.setText(
+                f"{label}\nAcquisition: {self.received_fps:.2f} FPS | "
+                f"buffer drops: {int(metrics.get('buffer_drops', 0))}\n"
+                "Camera parameters are managed in pylon Viewer."
+            )
         if self.tabs.currentIndex() == 0:
             self._show_original_metrics()
 
@@ -553,7 +829,7 @@ class MainWindow(QtWidgets.QMainWindow):
             )
             return
         frames = [packet.image for packet in list(self.history)[-needed:]]
-        scale = {"100%": 1.0, "50%": 0.5, "25%": 0.25}[self.scale.currentText()]
+        scale = self.preprocessing.processing_scale()
         motion_rois = [
             {k: roi[k] for k in ("x", "y", "width", "height", "name", "enabled")}
             for roi in self.original.rois("motion")
@@ -574,6 +850,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 frames=frames,
                 scale=scale,
                 stride=stride,
+                preprocessing=self.preprocessing.values(),
+                postprocessing=self.postprocessing.values(),
                 motion_compensation=self.comp.isChecked(),
                 motion_axis=self.motion_axis.currentText(),
                 motion_rois=motion_rois,

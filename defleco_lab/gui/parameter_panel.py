@@ -21,6 +21,7 @@ class NormalizedSpec:
     choices: tuple[Any, ...] = ()
     tooltip: str = ""
     item_type: str | None = None
+    visible_if: dict[str, Any] | None = None
 
 
 class ListEditor(QtWidgets.QLineEdit):
@@ -85,9 +86,14 @@ class ParameterPanel(QtWidgets.QWidget):
             label = name.replace("_", " ").title()
             if spec.units:
                 label += f" ({spec.units})"
-            editor.setToolTip(spec.tooltip or f"Method parameter: {name}")
+            tooltip = spec.tooltip or f"Method parameter: {name}"
+            editor.setToolTip(tooltip)
             self.form.addRow(label, editor)
+            label_widget = self.form.labelForField(editor)
+            if label_widget is not None:
+                label_widget.setToolTip(tooltip)
             self.editors[name] = editor
+        self._update_visibility()
 
     def _create_editor(self, spec: NormalizedSpec) -> QtWidgets.QWidget:
         if spec.kind == "bool":
@@ -174,7 +180,25 @@ class ParameterPanel(QtWidgets.QWidget):
         self._emit()
 
     def _emit(self, *_args: object) -> None:
+        self._update_visibility()
         self.parametersChanged.emit(self.values())
+
+    def _update_visibility(self) -> None:
+        current = self.values()
+        for name, editor in self.editors.items():
+            condition = self.specs[name].visible_if
+            visible = True
+            if condition:
+                for dependency, expected in condition.items():
+                    actual = current.get(dependency)
+                    allowed = expected if isinstance(expected, (list, tuple, set)) else [expected]
+                    if actual not in allowed:
+                        visible = False
+                        break
+            editor.setVisible(visible)
+            label = self.form.labelForField(editor)
+            if label is not None:
+                label.setVisible(visible)
 
 
 def _normalize_spec(raw: Any) -> NormalizedSpec:
@@ -197,6 +221,7 @@ def _normalize_spec(raw: Any) -> NormalizedSpec:
         choices=choices,
         tooltip=str(raw.get("tooltip", raw.get("explanation", ""))),
         item_type=raw.get("item_type"),
+        visible_if=raw.get("visible_if"),
     )
 
 

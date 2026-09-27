@@ -9,6 +9,9 @@ Defleco LAB is an independent, experimental Windows desktop laboratory for compa
 ## Highlights
 
 - Single-frame gradient, Laplacian, Difference of Gaussians, local residual, structure tensor, Gabor-bank, and experimental directional-residual views.
+- Integrated full-screen physical pattern output reusing the standalone V02 families: stripes, checkerboard, rings, composite X+Y, nested squares, squircle, spiral/counter-spiral, starburst, speckle and solid field.
+- Explicit pre-processing -> analysis method -> numeric response post-processing -> display pipeline with contextual controls and tooltips.
+- Automated step-and-capture screening foundation that preserves RAW frames, runs a bounded offline recipe set, and exports identifiable grayscale/colour/50% overlay results.
 - Multi-frame difference, temporal statistics/median residual, Farneback and DIS optical flow, DIC-like local phase-correlation grid, and temporal response fusion.
 - One-axis image-motion estimation from multiple dedicated Motion ROIs, quality gating, robust median fusion, cumulative position, and masked translation compensation.
 - Deterministic synthetic fringes, grid, checkerboard, speckle, translation, and localized deformation.
@@ -72,13 +75,15 @@ source -> immutable FramePacket -> bounded frame history -> processing method ->
                          \-> bounded raw recorder -> session -> replay --------/
 ```
 
-Algorithms implement a common metadata-rich interface; the parameter panel is generated from each method schema. Camera-specific objects do not enter processing code. See [architecture](docs/architecture.md), [methods](docs/methods.md), [motion compensation](docs/motion-compensation.md), and [session format](docs/session-format.md).
+Algorithms implement a common metadata-rich interface; the parameter panel is generated from each method schema and hides controls that are irrelevant to the selected output. Camera-specific objects do not enter processing code.
+
+For the integrated physical PoC workflow, see the [quick operator guide](docs/operator-guide.md). The persistent [development plan and context tracker](docs/development-plan.md) records what is implemented, what still needs physical validation, and the next experiment steps. See also [architecture](docs/architecture.md), [methods](docs/methods.md), [motion compensation](docs/motion-compensation.md), and [session format](docs/session-format.md).
 
 ### Live runtime behavior
 
 Live camera delivery uses a bounded mailbox and processing uses latest-wins/coalesced results so a multi-megapixel stream cannot build an unbounded Qt event backlog. The live history is intentionally bounded; very long temporal windows should be evaluated from a recorded session. Response rendering is display-only and may be downscaled independently of the numerical processing scale.
 
-For normal Basler live preview the application temporarily requests free-running continuous acquisition (`FrameStart` trigger off where supported) and restores the volatile acquisition state when the camera closes. It does not load/save persistent User Sets or change persistent network settings. Camera exposure/gain handling follows the proven behavior of the related Basler test tools: automatic mode and the current numeric ExposureTime/Gain are treated as separate state, and a manual value is not written while the corresponding auto loop is active.
+For normal Basler live preview the application temporarily requests free-running continuous acquisition (`FrameStart` trigger off where supported) and restores the volatile acquisition state when the camera closes. It does not load/save persistent User Sets or change persistent network settings. Normal exposure, gain, ROI and related camera configuration is intentionally left to Basler pylon Viewer instead of duplicating those controls in the Defleco LAB operator UI.
 
 The `Original` tab is intentionally a camera/recording baseline and does not run the selected processing method continuously. Processing begins when a processed/debug view is requested.
 
