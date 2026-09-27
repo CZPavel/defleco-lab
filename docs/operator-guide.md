@@ -117,3 +117,40 @@ For each of fine stripes, checkerboard and single spiral:
 Do not interpret a more colourful image as automatically being a better detector.
 The useful result is the one where the known defect becomes more localised or
 distinct while ordinary smooth curvature/pattern structure is suppressed.
+
+
+## Automated screening
+
+Use **Quick screening** first. It intentionally focuses on the pattern families and
+responses that were most promising in the first physical test instead of multiplying
+every possible parameter.
+
+1. Select **Basler** and start **Live** acquisition.
+2. Choose the external pattern display.
+3. Open **Screening experiment** and choose a parent folder.
+4. Keep the default settling delay for the first run.
+5. Start **Run pattern capture sweep**.
+
+The application then:
+
+- shows one deterministic pattern state;
+- waits for the configured settling time;
+- waits for a newer camera frame;
+- saves the lossless captured image and pattern/camera metadata;
+- advances to the next pattern state.
+
+After capture, automatic offline processing can produce named response recipes plus:
+
+- grayscale full response;
+- colour full response;
+- grayscale 50% overlay;
+- colour 50% overlay;
+- numeric float response data.
+
+The result folder also contains **screening_results.html**. Use **Open results** to
+browse the generated combinations and filter them by pattern group or processing
+recipe.
+
+**Extended screening** additionally reuses more families from the standalone V02
+generator and slower processing recipes. Run it only after Quick screening confirms
+that the display/camera geometry and pattern scale are sensible.
