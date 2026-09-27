@@ -71,6 +71,12 @@ def test_offline_screening_reuses_raw_frames_and_exports_variants(tmp_path) -> N
     result_path = process_capture_workspace(tmp_path, recipes=recipes)
     result = json.loads(result_path.read_text(encoding="utf-8"))
 
+    assert result["gallery"] == "screening_results.html"
+    gallery = tmp_path / result["gallery"]
+    assert gallery.exists()
+    gallery_text = gallery.read_text(encoding="utf-8")
+    assert "Defleco LAB screening results" in gallery_text
+    assert "color_overlay50" in gallery_text
     assert result["outputs"]
     assert {item["recipe_id"] for item in result["outputs"]} == {
         "scharr",
