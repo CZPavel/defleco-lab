@@ -29,7 +29,7 @@ FIELDS = (
 
 class SessionRecorder:
     def __init__(self, root: Path, notes: str = "") -> None:
-        stamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+        stamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S_%f")
         self.path = Path(root) / f"session_{stamp}.partial"
         self.frames = self.path / "frames"
         self.results = self.path / "results"
@@ -65,10 +65,14 @@ class SessionRecorder:
                 return
 
     def _write_metadata(self) -> None:
-        with (self.path / "metadata.csv").open("w", newline="", encoding="utf-8") as stream:
+        target = self.path / "metadata.csv"
+        temporary = self.path / "metadata.csv.tmp"
+        with temporary.open("w", newline="", encoding="utf-8") as stream:
             writer = csv.DictWriter(stream, fieldnames=FIELDS)
             writer.writeheader()
             writer.writerows(self.rows)
+            stream.flush()
+        temporary.replace(target)
 
     def close(self) -> Path:
         self._write_manifest(True)
@@ -87,7 +91,10 @@ class SessionRecorder:
             "frame_count": len(self.rows),
             "source": "sanitized",
         }
-        (self.path / "session.json").write_text(json.dumps(data, indent=2), encoding="utf-8")
+        target = self.path / "session.json"
+        temporary = self.path / "session.json.tmp"
+        temporary.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        temporary.replace(target)
 
 
 def load_session(path: Path) -> list[FramePacket]:
