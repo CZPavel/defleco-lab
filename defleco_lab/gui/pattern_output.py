@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, replace
 import math
+from dataclasses import asdict, dataclass, replace
 
 import numpy as np
 from PySide6 import QtCore, QtGui, QtWidgets
