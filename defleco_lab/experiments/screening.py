@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import cv2
 import numpy as np
@@ -338,20 +339,29 @@ def _number(value: float) -> str:
 class ScreeningProcessingWorker(QtCore.QThread):
     progressChanged = QtCore.Signal(int, int, str)
     completed = QtCore.Signal(str)
+    cancelled = QtCore.Signal()
     failed = QtCore.Signal(str)
 
     def __init__(self, root: Path, parent=None) -> None:
         super().__init__(parent)
         self.root = Path(root)
 
+    def cancel(self) -> None:
+        self.requestInterruption()
+
+    def _progress(self, done: int, total: int, label: str) -> None:
+        if self.isInterruptionRequested():
+            raise InterruptedError("Screening processing cancelled")
+        self.progressChanged.emit(done, total, label)
+
     def run(self) -> None:
         try:
-            path = process_capture_workspace(
-                self.root,
-                progress=lambda done, total, label: self.progressChanged.emit(
-                    done, total, label
-                ),
-            )
-            self.completed.emit(str(path))
-        except Exception as exc:  # keep batch failures outside the GUI event loop
+            path = process_capture_workspace(self.root, progress=self._progress)
+            if self.isInterruptionRequested():
+                self.cancelled.emit()
+            else:
+                self.completed.emit(str(path))
+        except InterruptedError:
+            self.cancelled.emit()
+        except (OSError, ValueError, RuntimeError, KeyError, TypeError, cv2.error) as exc:
             self.failed.emit(str(exc))
