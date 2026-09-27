@@ -55,8 +55,6 @@ def render_pattern(width: int, height: int, settings: PatternSettings) -> np.nda
     c_angle, s_angle = math.cos(angle), math.sin(angle)
     xr = c_angle * x + s_angle * y
     yr = -s_angle * x + c_angle * y
-    radius = np.hypot(x, y)
-    theta = np.arctan2(y, x)
     family = settings.family
 
     if family == "checker":
@@ -65,6 +63,7 @@ def render_pattern(width: int, height: int, settings: PatternSettings) -> np.nda
         iy = np.floor((yr + phase_px) / period).astype(np.int32)
         signal = ((ix + iy) % 2 == 0).astype(np.float32)
     elif family == "rings":
+        radius = np.hypot(x, y)
         cycles = radius / period + phase_cycles
         signal = _carrier(cycles, settings.waveform, duty)
     elif family == "composite":
@@ -76,9 +75,15 @@ def render_pattern(width: int, height: int, settings: PatternSettings) -> np.nda
         signal = _line_carrier(metric / period + phase_cycles, duty)
     elif family == "squircle":
         power = max(2.0, float(settings.squircle_power))
-        metric = (np.abs(xr) ** power + np.abs(yr) ** power) ** (1.0 / power)
+        ax = np.abs(xr)
+        ay = np.abs(yr)
+        scale = np.maximum(ax, ay)
+        safe = np.where(scale > 0, scale, 1.0)
+        metric = scale * ((ax / safe) ** power + (ay / safe) ** power) ** (1.0 / power)
         signal = _line_carrier(metric / period + phase_cycles, duty)
     elif family in {"spiral", "counter_spiral"}:
+        radius = np.hypot(x, y)
+        theta = np.arctan2(y, x)
         arms = max(1, int(settings.spiral_arms))
         width_fraction = np.clip(
             float(settings.spiral_width_percent) / 100.0, 0.02, 0.9
@@ -92,6 +97,7 @@ def render_pattern(width: int, height: int, settings: PatternSettings) -> np.nda
                 _line_carrier(opposite + phase_cycles, width_fraction),
             )
     elif family == "starburst":
+        theta = np.arctan2(y, x)
         spokes = max(2, int(settings.spokes))
         sectors = spokes * 2
         angular = np.mod(theta - angle + phase_cycles * (2.0 * np.pi / sectors), 2.0 * np.pi)
