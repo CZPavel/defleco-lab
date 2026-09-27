@@ -559,9 +559,11 @@ class MainWindow(QtWidgets.QMainWindow):
             screen = self.pattern_output.screen.currentData()
             self.pattern_output.output.show_on_screen(0 if screen is None else int(screen))
 
-        self._experiment_baseline_frame_id = (
-            self.history[-1].frame_id if self.history else None
-        )
+        # Do not choose the capture baseline until the requested display-settle
+        # interval has elapsed. Then require one strictly newer camera frame.
+        # This prevents a pre-settle frame that arrived during the delay from being
+        # accepted as the case image.
+        self._experiment_baseline_frame_id = None
         self._experiment_case_started = perf_counter()
         self.experiment.update_progress(
             self._experiment_index,
@@ -583,10 +585,18 @@ class MainWindow(QtWidgets.QMainWindow):
             return
 
         packet = self.history[-1]
+        if self._experiment_baseline_frame_id is None:
+            self._experiment_baseline_frame_id = packet.frame_id
+            self.experiment.status.setText(
+                f"Pattern settled; waiting for a fresh camera frame: "
+                f"{self._experiment_cases[self._experiment_index].case_id}"
+            )
+            return
+
         if packet.frame_id == self._experiment_baseline_frame_id:
             if elapsed_ms > max(5000.0, self._experiment_settle_ms + 3000.0):
                 self.experiment_timer.stop()
-                self.experiment.failed("Timed out waiting for a new camera frame.")
+                self.experiment.failed("Timed out waiting for a fresh post-settle camera frame.")
                 self._write_capture_manifest(status="error")
             return
 
@@ -1062,9 +1072,15 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _record_stop(self):
         if self.recorder:
-            path = self.recorder.close()
+            recorder = self.recorder
+            path = recorder.close()
             self.recorder = None
-            self.statusBar().showMessage(f"Session saved: {path}")
+            if recorder.dropped:
+                self.statusBar().showMessage(
+                    f"Session saved: {path} | WARNING: recorder dropped {recorder.dropped} item(s)"
+                )
+            else:
+                self.statusBar().showMessage(f"Session saved: {path} | recorder drops: 0")
 
     def _load_session(self):
         path = QtWidgets.QFileDialog.getExistingDirectory(self, "Open recorded session")
