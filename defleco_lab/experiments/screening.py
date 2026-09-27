@@ -551,5 +551,8 @@ class ScreeningProcessingWorker(QtCore.QThread):
                 self.completed.emit(str(path))
         except InterruptedError:
             self.cancelled.emit()
-        except (OSError, ValueError, RuntimeError, KeyError, TypeError, cv2.error) as exc:
+        except Exception as exc:
+            # Keep worker failures visible to the operator; otherwise an unexpected
+            # processing exception can terminate the thread while the GUI still
+            # appears to be running the experiment.
             self.failed.emit(str(exc))
