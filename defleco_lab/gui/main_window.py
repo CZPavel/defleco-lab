@@ -83,9 +83,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.visualization_timer.timeout.connect(self._render_visualization)
         self.processor = ProcessingWorker(self)
         self.processor.resultAvailable.connect(self._consume_processing_result)
-        self.processor.failed.connect(
-            lambda message: self.statusBar().showMessage(f"Processing: {message}")
-        )
+        self.processor.failed.connect(self._processing_failed)
         self.processor.start()
         self._build_ui()
         self._load_methods()
@@ -913,6 +911,13 @@ class MainWindow(QtWidgets.QMainWindow):
     def _reset_motion_position(self) -> None:
         self.processor.reset_state()
         self.statusBar().showMessage("Motion position reset to 0 px")
+
+    @QtCore.Slot(str)
+    def _processing_failed(self, message: str) -> None:
+        # Never leave an old response on screen after the current processing request failed.
+        self.last_result = None
+        self._clear_processed_views()
+        self.statusBar().showMessage(f"Processing: {message}")
 
     @QtCore.Slot()
     def _consume_processing_result(self) -> None:
