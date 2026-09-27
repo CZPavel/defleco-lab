@@ -48,16 +48,27 @@ def render_pattern(width: int, height: int, settings: PatternSettings) -> np.nda
     duty = np.clip(float(settings.duty_percent) / 100.0, 0.01, 0.99)
     phase_cycles = (float(settings.phase_deg) % 360.0) / 360.0
 
-    yy, xx = np.mgrid[:height, :width].astype(np.float32)
-    x = xx - (width - 1) / 2.0
-    y = yy - (height - 1) / 2.0
+    x = (np.arange(width, dtype=np.float32) - (width - 1) / 2.0)[None, :]
+    y = (np.arange(height, dtype=np.float32) - (height - 1) / 2.0)[:, None]
     angle = math.radians(float(settings.angle_deg))
     c_angle, s_angle = math.cos(angle), math.sin(angle)
-    xr = c_angle * x + s_angle * y
-    yr = -s_angle * x + c_angle * y
     family = settings.family
 
+    xr = None
+    yr = None
+    if family in {
+        "stripes",
+        "checker",
+        "composite",
+        "nested_square",
+        "squircle",
+    }:
+        xr = c_angle * x + s_angle * y
+        if family != "stripes":
+            yr = -s_angle * x + c_angle * y
+
     if family == "checker":
+        assert xr is not None and yr is not None
         phase_px = phase_cycles * period
         ix = np.floor((xr + phase_px) / period).astype(np.int32)
         iy = np.floor((yr + phase_px) / period).astype(np.int32)
@@ -67,13 +78,16 @@ def render_pattern(width: int, height: int, settings: PatternSettings) -> np.nda
         cycles = radius / period + phase_cycles
         signal = _carrier(cycles, settings.waveform, duty)
     elif family == "composite":
+        assert xr is not None and yr is not None
         x_signal = _carrier(xr / period + phase_cycles, settings.waveform, duty)
         y_signal = _carrier(yr / period + phase_cycles, settings.waveform, duty)
         signal = 0.5 * (x_signal + y_signal)
     elif family == "nested_square":
+        assert xr is not None and yr is not None
         metric = np.maximum(np.abs(xr), np.abs(yr))
         signal = _line_carrier(metric / period + phase_cycles, duty)
     elif family == "squircle":
+        assert xr is not None and yr is not None
         power = max(2.0, float(settings.squircle_power))
         ax = np.abs(xr)
         ay = np.abs(yr)
@@ -113,6 +127,7 @@ def render_pattern(width: int, height: int, settings: PatternSettings) -> np.nda
     elif family == "solid":
         signal = np.ones((height, width), np.float32)
     else:
+        assert xr is not None
         cycles = xr / period + phase_cycles
         signal = _carrier(cycles, settings.waveform, duty)
 
