@@ -200,3 +200,27 @@ def test_parameter_panel_hides_irrelevant_conditional_controls() -> None:
     app.processEvents()
     assert panel.editors["residual_sigma"].isVisible()
     panel.close()
+
+
+def test_camera_stop_failure_keeps_worker_and_blocks_restart(monkeypatch) -> None:
+    from defleco_lab.gui.main_window import MainWindow
+
+    app = _app()
+    window = MainWindow()
+
+    class StuckWorker:
+        def stop(self) -> bool:
+            return False
+
+    worker = StuckWorker()
+    window.camera_worker = worker
+    window.source_combo.setCurrentText("Basler")
+    window._start()
+
+    assert window.camera_worker is worker
+    assert window.state_label.text() == "ERROR"
+    assert "reconnect blocked" in window.statusBar().currentMessage()
+
+    window.camera_worker = None
+    window.close()
+    app.processEvents()
