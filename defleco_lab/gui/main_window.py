@@ -677,7 +677,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
     @QtCore.Slot(str)
     def _experiment_processing_complete(self, manifest: str) -> None:
-        self.experiment.finished(f"Screening results saved: {manifest}")
+        gallery = Path(manifest).parent / "screening_results.html"
+        self.experiment.set_results_path(str(gallery))
+        self.experiment.finished(f"Screening results ready: {gallery}")
         self.statusBar().showMessage("Automated screening processing complete")
         self._experiment_processing_worker = None
 
