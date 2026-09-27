@@ -75,6 +75,36 @@ Findings / actions:
       from the target workstation; the existing bounds are safe enough for the
       current ~6 FPS PoC and preserve useful temporal history.
 
+## Camera connection reliability review 2026-09-28
+
+Review driven by an older observed failure mode: live image could freeze after a
+long run, and an immediate reconnect from Defleco could fail until the camera had
+been opened/closed once in pylon Viewer.
+
+Findings / actions:
+
+- [x] Basler acquisition uses a single dedicated worker thread and a bounded mailbox;
+- [x] pylon delivery is OneByOne so frame loss is handled/observed by Defleco rather
+      than silently inside LatestImageOnly;
+- [x] a 5 s no-frame watchdog converts a silent stream stall into a controlled
+      acquisition error followed by camera teardown;
+- [x] camera teardown now clears the InstantCamera reference even when transport
+      calls such as IsGrabbing/IsOpen/Close raise after a device/network fault;
+- [x] starting a new camera session is blocked if the previous worker did not stop
+      within its timeout, preventing two workers from competing for the same device;
+- [x] a newly opened Basler session clears live temporal history so multi-frame
+      methods cannot combine frames from before and after reconnect;
+- [x] finished acquisition workers release the GUI reference and stop the camera
+      polling timer; reconnect therefore creates a fresh worker/device object;
+- [x] late queued signals from an older worker are ignored once a newer camera
+      session exists;
+- [x] camera status exposes frame age, retrieve timeout count and application mailbox
+      drops to distinguish processing load from acquisition/transport stalls;
+- [~] manual reconnect should now be sufficient after a recoverable stream error;
+      physical long-duration verification on the target GigE camera is still required;
+- [ ] if the same symptom survives these changes, capture the exact pypylon error and
+      GigE transport statistics before adding automatic reconnect/reset logic.
+
 ## Implemented foundation
 
 ### Acquisition and replay
