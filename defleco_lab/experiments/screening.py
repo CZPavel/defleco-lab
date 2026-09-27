@@ -114,10 +114,15 @@ def _phase_group(family: str, period: float, values: list[float]) -> list[Patter
     ]
 
 
-def default_analysis_recipes() -> list[AnalysisRecipe]:
-    """Initial recipes based on the first real-car observations and current hypotheses."""
+def default_analysis_recipes(profile: str = "quick") -> list[AnalysisRecipe]:
+    """Bounded recipes based on real-car observations and current hypotheses.
 
-    return [
+    Quick focuses on the responses that were already visually promising plus the
+    new line-suppression hypotheses. Extended adds slower/study-backed alternatives
+    without creating a free-form Cartesian parameter sweep.
+    """
+
+    recipes = [
         AnalysisRecipe(
             "scharr_magnitude",
             "gradient",
@@ -200,7 +205,60 @@ def default_analysis_recipes() -> list[AnalysisRecipe]:
                 "output": "range",
             },
         ),
+        AnalysisRecipe(
+            "directional_line_residual",
+            "directional_residual",
+            {"orientations": 8, "length": 21},
+        ),
     ]
+
+    if profile == "extended":
+        recipes.extend(
+            [
+                AnalysisRecipe(
+                    "scharr_vector_residual",
+                    "gradient",
+                    {
+                        "operator": "scharr",
+                        "sigma": 0.8,
+                        "ksize": 3,
+                        "residual_sigma": 8.0,
+                        "output": "vector_residual",
+                    },
+                ),
+                AnalysisRecipe(
+                    "dog_multiscale_baseline",
+                    "dog",
+                    {"sigma_small": 1.0, "sigma_large": 5.0},
+                ),
+                AnalysisRecipe(
+                    "gabor_orientation_residual",
+                    "gabor",
+                    {
+                        "periods": [16.0, 32.0],
+                        "orientations": 8,
+                        "sigma": 6.0,
+                        "gamma": 0.5,
+                        "psi": 0.0,
+                        "scale": 1.0,
+                        "output": "orientation_residual",
+                    },
+                    scale=0.5,
+                ),
+                AnalysisRecipe(
+                    "temporal_median_residual_5",
+                    "temporal_median_residual",
+                    {"window": 5, "stride": 1},
+                ),
+                AnalysisRecipe(
+                    "farneback_local_residual",
+                    "farneback",
+                    {"stride": 1, "output": "local_residual", "scale": 1.0},
+                    scale=0.5,
+                ),
+            ]
+        )
+    return recipes
 
 
 def process_capture_workspace(
@@ -217,7 +275,8 @@ def process_capture_workspace(
     if not records:
         raise ValueError("capture manifest contains no captured frames")
 
-    recipes = recipes or default_analysis_recipes()
+    profile = str(payload.get("profile", "quick"))
+    recipes = recipes or default_analysis_recipes(profile)
     groups: dict[str, list[dict[str, Any]]] = {}
     for record in records:
         groups.setdefault(str(record["group_id"]), []).append(record)
