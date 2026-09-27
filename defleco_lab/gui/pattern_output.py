@@ -242,6 +242,7 @@ class PatternOutputWindow(QtWidgets.QLabel):
         rendered_settings = replace(
             effective,
             period_px=max(2.0, effective.period_px * render_scale),
+            speckle_size_px=max(1, round(effective.speckle_size_px * render_scale)),
         )
         data = render_pattern(render_width, render_height, rendered_settings)
         image = QtGui.QImage(
