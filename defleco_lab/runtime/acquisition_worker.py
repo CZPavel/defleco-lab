@@ -30,6 +30,7 @@ class BaslerAcquisitionWorker(QtCore.QThread):
         temporary_settings=None,
         parent=None,
         buffer_capacity: int = 16,
+        stall_timeout_s: float = 5.0,
     ) -> None:
         super().__init__(parent)
         self.descriptor = descriptor
@@ -38,6 +39,7 @@ class BaslerAcquisitionWorker(QtCore.QThread):
         self._frames = deque(maxlen=max(2, int(buffer_capacity)))
         self._frames_lock = Lock()
         self._buffer_drops = 0
+        self._stall_timeout_s = max(1.0, float(stall_timeout_s))
 
     def stop(self) -> bool:
         self._stop.set()
@@ -73,6 +75,8 @@ class BaslerAcquisitionWorker(QtCore.QThread):
         errors = 0
         started = perf_counter()
         last_report = started
+        last_frame_at = started
+        consecutive_timeouts = 0
         try:
             source.open()
             report = source.prepare_free_run()
@@ -86,8 +90,18 @@ class BaslerAcquisitionWorker(QtCore.QThread):
                     packet = source.grab(timeout_ms=250)
                     self._store_frame(packet)
                     received += 1
+                    consecutive_timeouts = 0
+                    last_frame_at = perf_counter()
                 except TimeoutError:
                     timeouts += 1
+                    consecutive_timeouts += 1
+                    now = perf_counter()
+                    frame_age = now - last_frame_at
+                    if not self._stop.is_set() and frame_age >= self._stall_timeout_s:
+                        raise RuntimeError(
+                            f"Camera stream stalled: no frame for {frame_age:.1f} s "
+                            f"({consecutive_timeouts} consecutive retrieve timeouts)"
+                        )
                 now = perf_counter()
                 if now - last_report >= 0.5:
                     self.metricsReady.emit(
@@ -95,6 +109,8 @@ class BaslerAcquisitionWorker(QtCore.QThread):
                             "received_fps": received / max(now - started, 1e-9),
                             "received_frames": received,
                             "timeouts": timeouts,
+                            "consecutive_timeouts": consecutive_timeouts,
+                            "last_frame_age_s": max(0.0, now - last_frame_at),
                             "errors": errors,
                             "buffered_frames": self.buffered_frames,
                             "buffer_drops": self.buffer_drops,
@@ -111,6 +127,8 @@ class BaslerAcquisitionWorker(QtCore.QThread):
                     "received_fps": received / max(elapsed, 1e-9),
                     "received_frames": received,
                     "timeouts": timeouts,
+                    "consecutive_timeouts": consecutive_timeouts,
+                    "last_frame_age_s": max(0.0, perf_counter() - last_frame_at),
                     "errors": errors,
                     "buffered_frames": self.buffered_frames,
                     "buffer_drops": self.buffer_drops,
