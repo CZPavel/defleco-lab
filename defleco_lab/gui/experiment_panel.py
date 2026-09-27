@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
 from defleco_lab.experiments import build_pattern_cases
 
@@ -80,10 +80,18 @@ class ExperimentPanel(QtWidgets.QGroupBox):
         self.stop = QtWidgets.QPushButton("Stop")
         self.stop.clicked.connect(self.stopRequested)
         self.stop.setEnabled(False)
+        self.open_results = QtWidgets.QPushButton("Open results")
+        self.open_results.setEnabled(False)
+        self.open_results.setToolTip(
+            "Open the generated screening_results.html gallery in the default browser."
+        )
+        self.open_results.clicked.connect(self._open_results)
+        self._results_path = ""
 
         buttons = QtWidgets.QHBoxLayout()
         buttons.addWidget(self.start_capture)
         buttons.addWidget(self.process_existing)
+        buttons.addWidget(self.open_results)
         buttons.addWidget(self.stop)
 
         self.progress = QtWidgets.QProgressBar()
@@ -115,6 +123,10 @@ class ExperimentPanel(QtWidgets.QGroupBox):
         self.process_existing.setEnabled(not running)
         self.stop.setEnabled(running)
 
+    def set_results_path(self, path: str) -> None:
+        self._results_path = path
+        self.open_results.setEnabled(bool(path) and Path(path).exists())
+
     def update_progress(self, done: int, total: int, label: str) -> None:
         total = max(1, int(total))
         self.progress.setValue(round(100 * int(done) / total))
@@ -128,6 +140,12 @@ class ExperimentPanel(QtWidgets.QGroupBox):
     def failed(self, message: str) -> None:
         self.set_running(False)
         self.status.setText(f"Error: {message}")
+
+    def _open_results(self) -> None:
+        if self._results_path and Path(self._results_path).exists():
+            QtGui.QDesktopServices.openUrl(
+                QtCore.QUrl.fromLocalFile(str(Path(self._results_path).resolve()))
+            )
 
     def _browse(self) -> None:
         folder = QtWidgets.QFileDialog.getExistingDirectory(self, "Experiment parent folder")
