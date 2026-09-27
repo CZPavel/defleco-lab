@@ -12,6 +12,7 @@ from PySide6 import QtCore
 
 from defleco_lab.motion import MotionROI, PhaseMotionEstimator, compensate_translation
 from defleco_lab.processing.registry import registry
+from defleco_lab.processing.pipeline import apply_postprocessing, apply_preprocessing
 
 
 @dataclass(slots=True)
@@ -21,6 +22,8 @@ class ProcessingRequest:
     frames: list
     scale: float
     stride: int
+    preprocessing: dict[str, Any] | None = None
+    postprocessing: dict[str, Any] | None = None
     motion_compensation: bool = False
     motion_axis: str = "x"
     motion_rois: list[dict[str, Any]] | None = None
@@ -257,6 +260,9 @@ class ProcessingWorker(QtCore.QThread):
                             (frames[-1].shape[1], frames[-1].shape[0]),
                             interpolation=cv2.INTER_NEAREST,
                         ).astype(bool)
+                frames = [
+                    apply_preprocessing(frame, request.preprocessing) for frame in frames
+                ]
                 if request.analysis_rois:
                     height, width = frames[-1].shape[:2]
                     analysis_mask = np.zeros((height, width), dtype=bool)
@@ -276,6 +282,7 @@ class ProcessingWorker(QtCore.QThread):
                     valid_mask=valid_mask,
                     keep_intermediates=request.keep_intermediates,
                 )
+                result.primary = apply_postprocessing(result.primary, request.postprocessing)
                 if not request.keep_intermediates:
                     result.intermediates.clear()
                 if valid_mask is not None:
