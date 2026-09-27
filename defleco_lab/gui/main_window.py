@@ -20,6 +20,8 @@ from defleco_lab.sessions import AsyncSessionRecorder, load_session, replay_hist
 
 from .image_viewer import ImageViewer
 from .parameter_panel import ParameterPanel
+from .pattern_output import PatternControlPanel
+from .pipeline_panel import PostprocessingPanel, PreprocessingPanel
 from .visualization import VisualizationPanel, VisualizationSettings, VisualizationTransform
 
 
@@ -134,23 +136,15 @@ class MainWindow(QtWidgets.QMainWindow):
         camera_row.addWidget(self.camera_combo)
         camera_row.addWidget(discover)
         form.addRow("Explicit camera", camera_row)
-        self.camera_settings = {}
-        for label, node in (
-            ("Exposure us", "ExposureTime"),
-            ("Gain", "Gain"),
-            ("FPS", "AcquisitionFrameRate"),
-            ("Width", "Width"),
-            ("Height", "Height"),
-            ("Offset X", "OffsetX"),
-            ("Offset Y", "OffsetY"),
-        ):
-            editor = QtWidgets.QLineEdit()
-            editor.setPlaceholderText("leave unchanged")
-            editor.setToolTip(
-                "Optional session-only value; applied with GenICam writability and readback checks"
-            )
-            form.addRow(label, editor)
-            self.camera_settings[node] = editor
+        self.camera_status = QtWidgets.QLabel(
+            "Camera image acquisition only. Configure exposure, gain, ROI and other "
+            "camera parameters in Basler pylon Viewer."
+        )
+        self.camera_status.setWordWrap(True)
+        self.camera_status.setToolTip(
+            "Defleco LAB intentionally does not duplicate pylon camera-parameter controls."
+        )
+        form.addRow(self.camera_status)
         self.pattern = QtWidgets.QComboBox()
         self.pattern.addItems(["fringes", "checker", "grid", "speckle"])
         self.pattern.currentTextChanged.connect(self._change_pattern)
@@ -188,31 +182,65 @@ class MainWindow(QtWidgets.QMainWindow):
         left.setWidget(panel)
         self.addDockWidget(QtCore.Qt.DockWidgetArea.LeftDockWidgetArea, left)
 
-        right = QtWidgets.QDockWidget("Method / Parameters", self)
+        pattern_dock = QtWidgets.QDockWidget("Pattern generator", self)
+        self.pattern_output = PatternControlPanel()
+        pattern_dock.setWidget(self.pattern_output)
+        self.addDockWidget(QtCore.Qt.DockWidgetArea.LeftDockWidgetArea, pattern_dock)
+
+        right = QtWidgets.QDockWidget("Analysis pipeline", self)
         scroll = QtWidgets.QScrollArea()
         scroll.setWidgetResizable(True)
         rp = QtWidgets.QWidget()
         rform = QtWidgets.QVBoxLayout(rp)
+
+        self.preprocessing = PreprocessingPanel()
+        rform.addWidget(self.preprocessing)
+
+        method_group = QtWidgets.QGroupBox("2. Analysis method")
+        method_layout = QtWidgets.QVBoxLayout(method_group)
+        method_hint = QtWidgets.QLabel(
+            "Only parameters used by the selected method are shown. Hover a control "
+            "for a short explanation."
+        )
+        method_hint.setWordWrap(True)
+        method_layout.addWidget(method_hint)
+
         self.method_combo = QtWidgets.QComboBox()
         self.method_combo.currentIndexChanged.connect(self._method_changed)
-        rform.addWidget(self.method_combo)
+        method_layout.addWidget(self.method_combo)
         self.preset_combo = QtWidgets.QComboBox()
         self.preset_combo.addItem("Custom")
         self._load_presets()
         self.preset_combo.currentIndexChanged.connect(self._preset_changed)
-        rform.addWidget(self.preset_combo)
-        options = QtWidgets.QFormLayout()
+        method_layout.addWidget(self.preset_combo)
+
+        self.method_options = QtWidgets.QFormLayout()
         self.stride = QtWidgets.QSpinBox()
         self.stride.setRange(1, 16)
-        self.scale = QtWidgets.QComboBox()
-        self.scale.addItems(["100%", "50%", "25%"])
-        self.scale.setToolTip(
-            "Downscales frames before processing. Method parameters expressed in px "
-            "refer to the processed image grid, so keep scale fixed when comparing "
-            "parameter values across pattern experiments."
+        self.stride.setToolTip(
+            "Frame spacing used only by multi-frame methods. 1 means adjacent frames."
         )
-        self.comp = QtWidgets.QCheckBox("Enable one-axis compensation")
         self.analysis_only = QtWidgets.QCheckBox("Process enabled Analysis ROIs only")
+        self.analysis_only.setToolTip(
+            "Restrict numerical output to manually drawn Analysis ROIs."
+        )
+        self.method_options.addRow("Frame stride", self.stride)
+        self.method_options.addRow(self.analysis_only)
+        method_layout.addLayout(self.method_options)
+
+        self.params = ParameterPanel()
+        method_layout.addWidget(self.params)
+        rform.addWidget(method_group)
+
+        self.motion_group = QtWidgets.QGroupBox("Motion compensation (advanced)")
+        motion_form = QtWidgets.QFormLayout(self.motion_group)
+        motion_hint = QtWidgets.QLabel(
+            "Use only when the vehicle/object moves between frames. For the current "
+            "static-car experiments this can stay disabled."
+        )
+        motion_hint.setWordWrap(True)
+        motion_form.addRow(motion_hint)
+        self.comp = QtWidgets.QCheckBox("Enable one-axis compensation")
         self.motion_axis = QtWidgets.QComboBox()
         self.motion_axis.addItems(["x", "y"])
         self.motion_mode = QtWidgets.QComboBox()
@@ -235,35 +263,45 @@ class MainWindow(QtWidgets.QMainWindow):
         self.max_shift = QtWidgets.QDoubleSpinBox()
         self.max_shift.setRange(0.1, 10000)
         self.max_shift.setValue(50.0)
-        options.addRow("Frame stride", self.stride)
-        options.addRow("Processing scale", self.scale)
-        options.addRow(self.comp)
-        options.addRow(self.analysis_only)
-        options.addRow("Motion axis", self.motion_axis)
-        options.addRow("Motion mode", self.motion_mode)
-        options.addRow("Manual px/frame", self.manual_shift)
-        options.addRow("Motion preprocessing", self.motion_preprocessing)
-        options.addRow("Minimum texture", self.minimum_texture)
-        options.addRow("Minimum Q", self.minimum_q)
-        options.addRow("Deadband px", self.motion_deadband)
-        options.addRow("Maximum shift px", self.max_shift)
-        rform.addLayout(options)
-        self.params = ParameterPanel()
-        rform.addWidget(self.params)
+        motion_form.addRow(self.comp)
+        motion_form.addRow("Motion axis", self.motion_axis)
+        motion_form.addRow("Motion mode", self.motion_mode)
+        motion_form.addRow("Manual px/frame", self.manual_shift)
+        motion_form.addRow("Motion preprocessing", self.motion_preprocessing)
+        motion_form.addRow("Minimum texture", self.minimum_texture)
+        motion_form.addRow("Minimum Q", self.minimum_q)
+        motion_form.addRow("Deadband px", self.motion_deadband)
+        motion_form.addRow("Maximum shift px", self.max_shift)
+        reset_motion = QtWidgets.QPushButton("Reset motion position")
+        reset_motion.clicked.connect(self._reset_motion_position)
+        motion_form.addRow(reset_motion)
+        rform.addWidget(self.motion_group)
+
+        self.postprocessing = PostprocessingPanel()
+        rform.addWidget(self.postprocessing)
+
         self.visualization = VisualizationPanel()
         self.visualization.settingsChanged.connect(self._visualization_changed)
         self.visualization.rangeReset.connect(self.visualization_transform.reset_range)
         self.visualization.compareReferenceRequested.connect(self._set_compare_reference)
         rform.addWidget(self.visualization)
-        apply = QtWidgets.QPushButton("Apply / Process")
+
+        apply = QtWidgets.QPushButton("Apply / Process current frame")
+        apply.setToolTip(
+            "Recalculate the current frozen/replay frame. During live acquisition "
+            "new frames automatically use the current settings."
+        )
         apply.clicked.connect(self._process)
         rform.addWidget(apply)
-        reset_motion = QtWidgets.QPushButton("Reset motion position")
-        reset_motion.clicked.connect(self._reset_motion_position)
-        rform.addWidget(reset_motion)
+
+        help_group = QtWidgets.QGroupBox("Help for selected method")
+        help_layout = QtWidgets.QVBoxLayout(help_group)
         self.help = QtWidgets.QTextBrowser()
-        self.help.setMinimumHeight(240)
-        rform.addWidget(self.help)
+        self.help.setMinimumHeight(220)
+        help_layout.addWidget(self.help)
+        rform.addWidget(help_group)
+        rform.addStretch(1)
+
         scroll.setWidget(rp)
         right.setWidget(scroll)
         self.addDockWidget(QtCore.Qt.DockWidgetArea.RightDockWidgetArea, right)
@@ -309,8 +347,21 @@ class MainWindow(QtWidgets.QMainWindow):
             {key: value for key, value in info.parameters.items() if key != "stride"}
         )
         self.help.setMarkdown(
-            f"### {info.name}\n\n{info.description}\n\n**Frames:** {info.required_frames}\n\n**Recommended use:** {info.recommended_use or 'Exploratory comparison.'}\n\n**Limitations:** {info.limitations or 'Scene-dependent; not a metrological result.'}\n\n**Motion compensation:** {'supported' if info.supports_motion_compensation else 'not normally required'}\n\n**References:** {', '.join(info.references) if info.references else 'See docs/references.md.'}"
+            f"### {info.name}\n\n{info.description}\n\n"
+            f"**Frames:** {info.required_frames}\n\n"
+            f"**Recommended use:** {info.recommended_use or 'Exploratory comparison.'}\n\n"
+            f"**Limitations:** {info.limitations or 'Scene-dependent; not a metrological result.'}\n\n"
+            f"**Motion compensation:** {'supported' if info.supports_motion_compensation else 'not normally required'}\n\n"
+            "**Tip:** Start from default parameters. Change one family of settings at a time "
+            "and use recorded frames when comparing methods.\n\n"
+            f"**References:** {', '.join(info.references) if info.references else 'See docs/references.md.'}"
         )
+        multi_frame = info.required_frames > 1 or "stride" in info.parameters
+        self.stride.setVisible(multi_frame)
+        stride_label = self.method_options.labelForField(self.stride)
+        if stride_label is not None:
+            stride_label.setVisible(multi_frame)
+        self.motion_group.setVisible(info.supports_motion_compensation)
         if self.replay:
             self._seek_absolute(self.slider.value())
         else:
@@ -324,7 +375,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if idx >= 0:
             self.method_combo.setCurrentIndex(idx)
         self.stride.setValue(int(p.get("frame_stride", 1)))
-        self.scale.setCurrentText(f"{int(p.get('processing_scale', 1) * 100)}%")
+        self.preprocessing.set_processing_scale(float(p.get("processing_scale", 1)))
         self.comp.setChecked(bool(p.get("motion_compensation", False)))
         if "motion_mode" in p:
             self.motion_mode.setCurrentText(str(p["motion_mode"]))
@@ -365,16 +416,9 @@ class MainWindow(QtWidgets.QMainWindow):
             if descriptor is None:
                 self.statusBar().showMessage("Discover and explicitly select a camera first")
                 return
-            temporary = {}
-            for node, editor in self.camera_settings.items():
-                text = editor.text().strip()
-                if text:
-                    temporary[node] = (
-                        int(float(text))
-                        if node in {"Width", "Height", "OffsetX", "OffsetY"}
-                        else float(text)
-                    )
-            self.camera_worker = BaslerAcquisitionWorker(descriptor, temporary, self)
+            # Camera parameters are intentionally configured in pylon Viewer.
+            # Defleco LAB only owns acquisition for the experiment.
+            self.camera_worker = BaslerAcquisitionWorker(descriptor, {}, self)
             self.camera_worker.failed.connect(self._camera_failed)
             self.camera_worker.metricsReady.connect(self._camera_metrics)
             self.camera_worker.restoreReport.connect(self._camera_restored)
@@ -423,6 +467,7 @@ class MainWindow(QtWidgets.QMainWindow):
         return True
 
     def closeEvent(self, event):
+        self.pattern_output.shutdown()
         if not self._stop():
             self.statusBar().showMessage(
                 "Camera worker did not stop cleanly; close postponed to protect camera state"
@@ -523,6 +568,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.camera_metrics = dict(metrics)
         if self.source_combo.currentText() == "Basler":
             self.received_fps = float(metrics.get("received_fps", 0.0))
+            descriptor = self.camera_combo.currentData()
+            label = descriptor.label if descriptor is not None else "Basler"
+            self.camera_status.setText(
+                f"{label}\nAcquisition: {self.received_fps:.2f} FPS | "
+                f"buffer drops: {int(metrics.get('buffer_drops', 0))}\n"
+                "Camera parameters are managed in pylon Viewer."
+            )
         if self.tabs.currentIndex() == 0:
             self._show_original_metrics()
 
@@ -553,7 +605,7 @@ class MainWindow(QtWidgets.QMainWindow):
             )
             return
         frames = [packet.image for packet in list(self.history)[-needed:]]
-        scale = {"100%": 1.0, "50%": 0.5, "25%": 0.25}[self.scale.currentText()]
+        scale = self.preprocessing.processing_scale()
         motion_rois = [
             {k: roi[k] for k in ("x", "y", "width", "height", "name", "enabled")}
             for roi in self.original.rois("motion")
@@ -574,6 +626,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 frames=frames,
                 scale=scale,
                 stride=stride,
+                preprocessing=self.preprocessing.values(),
+                postprocessing=self.postprocessing.values(),
                 motion_compensation=self.comp.isChecked(),
                 motion_axis=self.motion_axis.currentText(),
                 motion_rois=motion_rois,
