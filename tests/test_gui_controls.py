@@ -302,3 +302,35 @@ def test_initial_window_size_fits_dpi_scaled_fhd_work_areas() -> None:
         assert target.width() <= available.width()
         assert target.height() <= available.height()
         assert target.height() >= min(600, available.height())
+
+
+
+def test_linked_compare_viewers_preserve_fit_mode() -> None:
+    from defleco_lab.gui.image_viewer import ImageViewer
+
+    app = _app()
+    left = ImageViewer()
+    right = ImageViewer()
+    left.viewTransformChanged.connect(right.apply_view_transform)
+    right.viewTransformChanged.connect(left.apply_view_transform)
+    left.resize(500, 350)
+    right.resize(500, 350)
+    left.show()
+    right.show()
+    image = np.zeros((800, 1200), np.uint8)
+    left.set_array(image)
+    right.set_array(image)
+    app.processEvents()
+
+    left.fit_to_window()
+    app.processEvents()
+    assert left._fit
+    assert right._fit
+
+    left.actual_size()
+    app.processEvents()
+    assert not left._fit
+    assert not right._fit
+
+    left.close()
+    right.close()

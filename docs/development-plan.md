@@ -130,6 +130,8 @@ Findings / actions:
 - [x] fitted viewers refit after viewport resize, tab activation and
       fullscreen/normal transitions, preventing the lower part of the image from
       remaining outside the viewport;
+- [x] linked Compare viewers now synchronize both transform and Fit/manual state,
+      so refitting one side no longer silently disables automatic fitting on the other;
 - [x] 1:1/manual zoom re-enables scrollbars and panning only when the image is
       actually larger than the viewport;
 - [x] focused GUI regression tests cover fit-after-resize, FHD-sized layout,

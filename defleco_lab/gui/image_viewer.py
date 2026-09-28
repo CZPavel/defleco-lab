@@ -134,7 +134,7 @@ class ImageViewer(QtWidgets.QGraphicsView):
             self.scale(scale, scale)
             self.centerOn(rect.center())
         self._last_fit_key = key
-        self.viewTransformChanged.emit(self.transform())
+        self.viewTransformChanged.emit((QtGui.QTransform(self.transform()), self._fit))
 
     def refresh_fit(self) -> None:
         """Refit only when this viewer is already in Fit mode."""
@@ -152,12 +152,21 @@ class ImageViewer(QtWidgets.QGraphicsView):
         self.resetTransform()
         if not self._pixmap.pixmap().isNull():
             self.centerOn(self._pixmap.boundingRect().center())
-        self.viewTransformChanged.emit(self.transform())
+        self.viewTransformChanged.emit((QtGui.QTransform(self.transform()), self._fit))
 
-    def apply_view_transform(self, transform: QtGui.QTransform) -> None:
-        self._fit = False
+    def apply_view_transform(self, state: object) -> None:
+        # Compare viewers propagate both the transform and whether it represents
+        # automatic Fit mode. Keeping only the matrix made one side silently leave
+        # Fit mode whenever the other side refitted.
+        fit = False
+        transform = state
+        if isinstance(state, tuple) and len(state) == 2:
+            transform, fit = state
+        if not isinstance(transform, QtGui.QTransform):
+            return
+        self._fit = bool(fit)
         self._last_fit_key = None
-        self._set_scrollbars_for_fit(False)
+        self._set_scrollbars_for_fit(self._fit)
         self.setTransform(transform)
 
     def reset_view(self) -> None:
@@ -253,7 +262,7 @@ class ImageViewer(QtWidgets.QGraphicsView):
         self._last_fit_key = None
         self._set_scrollbars_for_fit(False)
         self.scale(factor, factor)
-        self.viewTransformChanged.emit(self.transform())
+        self.viewTransformChanged.emit((QtGui.QTransform(self.transform()), self._fit))
         event.accept()
 
     def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:
