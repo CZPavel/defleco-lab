@@ -28,6 +28,31 @@ from .pipeline_panel import PostprocessingPanel, PreprocessingPanel
 from .visualization import VisualizationPanel, VisualizationSettings, VisualizationTransform
 
 
+def _bounded_initial_size(available: QtCore.QSize) -> QtCore.QSize:
+    """Choose a useful default size that still fits a DPI-scaled desktop."""
+    width = min(1500, max(900, round(available.width() * 0.92)))
+    height = min(900, max(600, round(available.height() * 0.90)))
+    return QtCore.QSize(
+        min(width, max(1, available.width())),
+        min(height, max(1, available.height())),
+    )
+
+
+def _scrollable_dock_content(widget: QtWidgets.QWidget) -> QtWidgets.QScrollArea:
+    scroll = QtWidgets.QScrollArea()
+    scroll.setWidgetResizable(True)
+    scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+    scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+    scroll.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+    scroll.setMinimumSize(0, 0)
+    scroll.setSizePolicy(
+        QtWidgets.QSizePolicy.Policy.Expanding,
+        QtWidgets.QSizePolicy.Policy.Expanding,
+    )
+    scroll.setWidget(widget)
+    return scroll
+
+
 class MainWindow(QtWidgets.QMainWindow):
     LIVE_HISTORY_CAPACITY = 64
     DISPLAY_MAX_PIXELS = 1_500_000
@@ -35,7 +60,6 @@ class MainWindow(QtWidgets.QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Defleco LAB - Experimental Research Software")
-        self.resize(1500, 900)
         self.source = SyntheticSource()
         # Keep live memory bounded. At 2448x2048 Mono8, 512 frames exceed 2.5 GB.
         self.history = deque(maxlen=self.LIVE_HISTORY_CAPACITY)
@@ -90,6 +114,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.processor.start()
         self._build_ui()
         self._load_methods()
+        self._apply_initial_window_size()
+        QtCore.QTimer.singleShot(0, self._finish_initial_layout)
         self.statusBar().showMessage("Ready - synthetic source - camera idle")
         self._next_frame()
 
@@ -136,9 +162,15 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         toolbar.addWidget(self.state_label)
         toolbar.addSeparator()
+        self.metrics.setMinimumWidth(0)
+        self.metrics.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Ignored,
+            QtWidgets.QSizePolicy.Policy.Preferred,
+        )
         toolbar.addWidget(self.metrics)
 
-        left = QtWidgets.QDockWidget("Input / Camera / Session", self)
+        self.input_dock = QtWidgets.QDockWidget("Input / Camera / Session", self)
+        self.input_dock.setObjectName("input_camera_session_dock")
         panel = QtWidgets.QWidget()
         form = QtWidgets.QFormLayout(panel)
         self.source_combo = QtWidgets.QComboBox()
@@ -149,6 +181,10 @@ class MainWindow(QtWidgets.QMainWindow):
         form.addRow("Source", self.source_combo)
         camera_row = QtWidgets.QHBoxLayout()
         self.camera_combo = QtWidgets.QComboBox()
+        self.camera_combo.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Ignored,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
         discover = QtWidgets.QPushButton("Discover")
         discover.clicked.connect(self._discover_cameras)
         camera_row.addWidget(self.camera_combo)
@@ -197,23 +233,37 @@ class MainWindow(QtWidgets.QMainWindow):
         self.notes = QtWidgets.QPlainTextEdit()
         self.notes.setMaximumHeight(70)
         form.addRow("Session notes", self.notes)
-        left.setWidget(panel)
-        self.addDockWidget(QtCore.Qt.DockWidgetArea.LeftDockWidgetArea, left)
+        self.input_dock.setWidget(_scrollable_dock_content(panel))
+        self.addDockWidget(QtCore.Qt.DockWidgetArea.LeftDockWidgetArea, self.input_dock)
 
-        pattern_dock = QtWidgets.QDockWidget("Pattern generator", self)
+        self.pattern_dock = QtWidgets.QDockWidget("Pattern generator", self)
+        self.pattern_dock.setObjectName("pattern_generator_dock")
         self.pattern_output = PatternControlPanel()
-        pattern_dock.setWidget(self.pattern_output)
-        self.addDockWidget(QtCore.Qt.DockWidgetArea.LeftDockWidgetArea, pattern_dock)
+        self.pattern_dock.setWidget(_scrollable_dock_content(self.pattern_output))
+        self.addDockWidget(QtCore.Qt.DockWidgetArea.LeftDockWidgetArea, self.pattern_dock)
 
-        experiment_dock = QtWidgets.QDockWidget("Screening experiment", self)
+        self.experiment_dock = QtWidgets.QDockWidget("Screening experiment", self)
+        self.experiment_dock.setObjectName("screening_experiment_dock")
         self.experiment = ExperimentPanel()
         self.experiment.captureRequested.connect(self._run_capture_experiment)
         self.experiment.processRequested.connect(self._start_offline_processing)
         self.experiment.stopRequested.connect(self._stop_experiment)
-        experiment_dock.setWidget(self.experiment)
-        self.addDockWidget(QtCore.Qt.DockWidgetArea.LeftDockWidgetArea, experiment_dock)
+        self.experiment_dock.setWidget(_scrollable_dock_content(self.experiment))
+        self.addDockWidget(QtCore.Qt.DockWidgetArea.LeftDockWidgetArea, self.experiment_dock)
 
-        right = QtWidgets.QDockWidget("Analysis pipeline", self)
+        # These are alternative workflows, not three simultaneous vertical panels.
+        # Tabifying them keeps the central camera view usable on FHD / DPI-scaled
+        # desktops while every control remains reachable by scrolling.
+        self.tabifyDockWidget(self.input_dock, self.pattern_dock)
+        self.tabifyDockWidget(self.pattern_dock, self.experiment_dock)
+        self.setTabPosition(
+            QtCore.Qt.DockWidgetArea.LeftDockWidgetArea,
+            QtWidgets.QTabWidget.TabPosition.North,
+        )
+        self.input_dock.raise_()
+
+        self.analysis_dock = QtWidgets.QDockWidget("Analysis pipeline", self)
+        self.analysis_dock.setObjectName("analysis_pipeline_dock")
         scroll = QtWidgets.QScrollArea()
         scroll.setWidgetResizable(True)
         rp = QtWidgets.QWidget()
@@ -232,9 +282,17 @@ class MainWindow(QtWidgets.QMainWindow):
         method_layout.addWidget(method_hint)
 
         self.method_combo = QtWidgets.QComboBox()
+        self.method_combo.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Ignored,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
         self.method_combo.currentIndexChanged.connect(self._method_changed)
         method_layout.addWidget(self.method_combo)
         self.preset_combo = QtWidgets.QComboBox()
+        self.preset_combo.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Ignored,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
         self.preset_combo.addItem("Custom")
         self._load_presets()
         self.preset_combo.currentIndexChanged.connect(self._preset_changed)
@@ -323,14 +381,18 @@ class MainWindow(QtWidgets.QMainWindow):
         help_group = QtWidgets.QGroupBox("Help for selected method")
         help_layout = QtWidgets.QVBoxLayout(help_group)
         self.help = QtWidgets.QTextBrowser()
-        self.help.setMinimumHeight(220)
+        self.help.setMinimumHeight(120)
+        self.help.setMaximumHeight(220)
         help_layout.addWidget(self.help)
         rform.addWidget(help_group)
         rform.addStretch(1)
 
+        scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setMinimumSize(0, 0)
         scroll.setWidget(rp)
-        right.setWidget(scroll)
-        self.addDockWidget(QtCore.Qt.DockWidgetArea.RightDockWidgetArea, right)
+        self.analysis_dock.setWidget(scroll)
+        self.addDockWidget(QtCore.Qt.DockWidgetArea.RightDockWidgetArea, self.analysis_dock)
 
         transport = QtWidgets.QToolBar("Transport")
         self.addToolBar(QtCore.Qt.ToolBarArea.BottomToolBarArea, transport)
@@ -347,8 +409,45 @@ class MainWindow(QtWidgets.QMainWindow):
             button.triggered.connect(slot)
             transport.addAction(button)
         self.slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self.slider.setMinimumWidth(80)
+        self.slider.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Preferred,
+        )
         self.slider.valueChanged.connect(self._seek_absolute)
         transport.addWidget(self.slider)
+
+    def _apply_initial_window_size(self) -> None:
+        screen = QtGui.QGuiApplication.primaryScreen()
+        if screen is None:
+            self.resize(1200, 760)
+            return
+        self.resize(_bounded_initial_size(screen.availableGeometry().size()))
+
+    def _finish_initial_layout(self) -> None:
+        # Widths are preferences, not minimums. Docks remain resizable/collapsible.
+        self.resizeDocks(
+            [self.input_dock, self.analysis_dock],
+            [330, 360],
+            QtCore.Qt.Orientation.Horizontal,
+        )
+        self.input_dock.raise_()
+        self._refit_visible_viewers()
+
+    def _all_viewers(self) -> tuple[ImageViewer, ...]:
+        return (
+            self.original,
+            self.processed,
+            self.intermediate,
+            self.compare_left,
+            self.compare_right,
+            self.motion_debug,
+        )
+
+    def _refit_visible_viewers(self) -> None:
+        for viewer in self._all_viewers():
+            if viewer.isVisible():
+                viewer.refresh_fit()
 
     def _load_methods(self) -> None:
         self.method_combo.clear()
@@ -1036,6 +1135,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     @QtCore.Slot(int)
     def _active_view_changed(self, index: int) -> None:
+        QtCore.QTimer.singleShot(0, self._refit_visible_viewers)
         if index == 0:
             if self.last_original is not None:
                 self.original.set_array(self.last_original)
@@ -1241,30 +1341,12 @@ class MainWindow(QtWidgets.QMainWindow):
             viewer.clear_image()
 
     def _fit(self):
-        [
-            v.fit_to_window()
-            for v in (
-                self.original,
-                self.processed,
-                self.intermediate,
-                self.compare_left,
-                self.compare_right,
-                self.motion_debug,
-            )
-        ]
+        for viewer in self._all_viewers():
+            viewer.fit_to_window()
 
     def _actual(self):
-        [
-            v.actual_size()
-            for v in (
-                self.original,
-                self.processed,
-                self.intermediate,
-                self.compare_left,
-                self.compare_right,
-                self.motion_debug,
-            )
-        ]
+        for viewer in self._all_viewers():
+            viewer.actual_size()
 
     def _snapshot(self):
         if self.last_result is None:
@@ -1279,3 +1361,4 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _fullscreen(self):
         self.showNormal() if self.isFullScreen() else self.showFullScreen()
+        QtCore.QTimer.singleShot(0, self._refit_visible_viewers)

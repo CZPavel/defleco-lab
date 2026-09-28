@@ -468,6 +468,14 @@ class PatternControlPanel(QtWidgets.QGroupBox):
         )
 
         self.screen = QtWidgets.QComboBox()
+        self.screen.setSizeAdjustPolicy(
+            QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.screen.setMinimumContentsLength(12)
+        self.screen.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Ignored,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
         self.refresh_screens()
 
         self.show_button = QtWidgets.QPushButton("Show on display")

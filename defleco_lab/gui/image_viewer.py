@@ -37,9 +37,21 @@ class ImageViewer(QtWidgets.QGraphicsView):
         self._roi_mode: str | None = None
         self._origin: QtCore.QPointF | None = None
         self._rubber: QtWidgets.QGraphicsRectItem | None = None
+        self._last_fit_key: tuple[int, int, int, int] | None = None
         self.setDragMode(QtWidgets.QGraphicsView.DragMode.ScrollHandDrag)
         self.setMouseTracking(True)
         self.setBackgroundBrush(QtGui.QColor("#11151a"))
+        self.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        self.setTransformationAnchor(
+            QtWidgets.QGraphicsView.ViewportAnchor.AnchorUnderMouse
+        )
+        self.setResizeAnchor(QtWidgets.QGraphicsView.ViewportAnchor.AnchorViewCenter)
+        self.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Expanding,
+        )
+        self.setMinimumSize(160, 120)
+        self._set_scrollbars_for_fit(True)
 
     def set_array(self, image: np.ndarray, heatmap: bool = False) -> None:
         a = np.asarray(image)
@@ -76,31 +88,90 @@ class ImageViewer(QtWidgets.QGraphicsView):
         self._image = np.asarray(source)
         self._pixmap.setPixmap(QtGui.QPixmap.fromImage(qimage))
         self.scene().setSceneRect(self._pixmap.boundingRect())
-        if self._fit:
-            self.fit_to_window()
+        self._refit_if_needed()
 
     def clear_image(self) -> None:
         self._image = None
         self._pixmap.setPixmap(QtGui.QPixmap())
         self.scene().setSceneRect(QtCore.QRectF())
+        self._last_fit_key = None
+        if self._fit:
+            self.resetTransform()
 
-    def fit_to_window(self) -> None:
-        if not self._pixmap.pixmap().isNull():
-            self.fitInView(self._pixmap, QtCore.Qt.AspectRatioMode.KeepAspectRatio)
-        self._fit = True
+    def _set_scrollbars_for_fit(self, fit: bool) -> None:
+        policy = (
+            QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+            if fit
+            else QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
+        self.setHorizontalScrollBarPolicy(policy)
+        self.setVerticalScrollBarPolicy(policy)
+
+    def _refit_if_needed(self, force: bool = False) -> None:
+        if not self._fit or self._pixmap.pixmap().isNull():
+            return
+        viewport = self.viewport()
+        pixmap = self._pixmap.pixmap()
+        key = (viewport.width(), viewport.height(), pixmap.width(), pixmap.height())
+        if not force and key == self._last_fit_key:
+            return
+        if key[0] < 2 or key[1] < 2 or key[2] < 1 or key[3] < 1:
+            return
+
+        # Compute the fit explicitly instead of QGraphicsView.fitInView().
+        # Qt's fitInView() can toggle automatic scrollbars while resizing, which
+        # changes the viewport size and can leave a fitted image clipped.
+        self._set_scrollbars_for_fit(True)
+        self.resetTransform()
+        rect = self._pixmap.boundingRect()
+        available_width = max(1.0, float(viewport.width() - 2))
+        available_height = max(1.0, float(viewport.height() - 2))
+        scale = min(
+            available_width / max(rect.width(), 1.0),
+            available_height / max(rect.height(), 1.0),
+        )
+        if np.isfinite(scale) and scale > 0:
+            self.scale(scale, scale)
+            self.centerOn(rect.center())
+        self._last_fit_key = key
         self.viewTransformChanged.emit(self.transform())
 
+    def refresh_fit(self) -> None:
+        """Refit only when this viewer is already in Fit mode."""
+        self._refit_if_needed(force=True)
+
+    def fit_to_window(self) -> None:
+        self._fit = True
+        self._last_fit_key = None
+        self._refit_if_needed(force=True)
+
     def actual_size(self) -> None:
-        self.resetTransform()
         self._fit = False
+        self._last_fit_key = None
+        self._set_scrollbars_for_fit(False)
+        self.resetTransform()
+        if not self._pixmap.pixmap().isNull():
+            self.centerOn(self._pixmap.boundingRect().center())
         self.viewTransformChanged.emit(self.transform())
 
     def apply_view_transform(self, transform: QtGui.QTransform) -> None:
-        self.setTransform(transform)
         self._fit = False
+        self._last_fit_key = None
+        self._set_scrollbars_for_fit(False)
+        self.setTransform(transform)
 
     def reset_view(self) -> None:
         self.fit_to_window()
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
+        super().resizeEvent(event)
+        if self._fit:
+            QtCore.QTimer.singleShot(0, self._refit_if_needed)
+
+    def showEvent(self, event: QtGui.QShowEvent) -> None:
+        super().showEvent(event)
+        if self._fit:
+            QtCore.QTimer.singleShot(0, self._refit_if_needed)
 
     def begin_roi(self, roi_type: str) -> None:
         self._roi_mode = roi_type
@@ -169,10 +240,21 @@ class ImageViewer(QtWidgets.QGraphicsView):
         super().keyPressEvent(event)
 
     def wheelEvent(self, event: QtGui.QWheelEvent) -> None:
+        if self._pixmap.pixmap().isNull():
+            super().wheelEvent(event)
+            return
         factor = 1.18 if event.angleDelta().y() > 0 else 1 / 1.18
-        self.scale(factor, factor)
+        current_scale = abs(float(self.transform().m11()))
+        requested_scale = current_scale * factor
+        if not 0.01 <= requested_scale <= 64.0:
+            event.accept()
+            return
         self._fit = False
+        self._last_fit_key = None
+        self._set_scrollbars_for_fit(False)
+        self.scale(factor, factor)
         self.viewTransformChanged.emit(self.transform())
+        event.accept()
 
     def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:
         if self._roi_mode and event.button() == QtCore.Qt.MouseButton.LeftButton:

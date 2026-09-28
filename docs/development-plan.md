@@ -105,6 +105,39 @@ Findings / actions:
 - [ ] if the same symptom survives these changes, capture the exact pypylon error and
       GigE transport statistics before adding automatic reconnect/reset logic.
 
+## GUI usability review 2026-09-28
+
+Review driven by physical use on an FHD workstation where the application could
+not be reduced enough vertically and the camera image could remain clipped after
+window/maximize/fullscreen geometry changes.
+
+Findings / actions:
+
+- [x] initial window size is now derived from the available logical desktop size,
+      so Windows DPI scaling cannot make the default 1500x900 logical window taller
+      than an FHD work area;
+- [x] Input/Camera, Pattern generator and Screening experiment are tabbed as
+      alternative left-side workflows instead of being stacked vertically;
+- [x] all three left workflows are scrollable, so their content no longer imposes
+      a large minimum window height;
+- [x] long camera/method/display combo-box contents may shrink instead of forcing
+      oversized side docks;
+- [x] the screening action buttons use a compact 2x2 layout instead of one very
+      wide row;
+- [x] ImageViewer Fit mode no longer relies on QGraphicsView.fitInView with
+      automatic scrollbars; the scale is computed explicitly and fit-mode
+      scrollbars remain off;
+- [x] fitted viewers refit after viewport resize, tab activation and
+      fullscreen/normal transitions, preventing the lower part of the image from
+      remaining outside the viewport;
+- [x] 1:1/manual zoom re-enables scrollbars and panning only when the image is
+      actually larger than the viewport;
+- [x] focused GUI regression tests cover fit-after-resize, FHD-sized layout,
+      tabbed/scrollable left docks and DPI-scaled initial-size bounds;
+- [~] physical verification is still required on the target Windows/FHD monitor
+      because CI uses Qt's offscreen platform and cannot reproduce GPU/display-driver
+      window-manager details.
+
 ## Implemented foundation
 
 ### Acquisition and replay

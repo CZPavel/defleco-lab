@@ -88,11 +88,14 @@ class ExperimentPanel(QtWidgets.QGroupBox):
         self.open_results.clicked.connect(self._open_results)
         self._results_path = ""
 
-        buttons = QtWidgets.QHBoxLayout()
-        buttons.addWidget(self.start_capture)
-        buttons.addWidget(self.process_existing)
-        buttons.addWidget(self.open_results)
-        buttons.addWidget(self.stop)
+        buttons = QtWidgets.QGridLayout()
+        buttons.setContentsMargins(0, 0, 0, 0)
+        buttons.addWidget(self.start_capture, 0, 0)
+        buttons.addWidget(self.process_existing, 0, 1)
+        buttons.addWidget(self.open_results, 1, 0)
+        buttons.addWidget(self.stop, 1, 1)
+        buttons.setColumnStretch(0, 1)
+        buttons.setColumnStretch(1, 1)
 
         self.progress = QtWidgets.QProgressBar()
         self.progress.setRange(0, 100)

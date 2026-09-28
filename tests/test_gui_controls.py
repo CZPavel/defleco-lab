@@ -5,7 +5,7 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import numpy as np
-from PySide6 import QtGui, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
 from defleco_lab.app import configure_application
 from defleco_lab.gui.parameter_panel import ListEditor, ParameterPanel
@@ -224,3 +224,81 @@ def test_camera_stop_failure_keeps_worker_and_blocks_restart(monkeypatch) -> Non
     window.camera_worker = None
     window.close()
     app.processEvents()
+
+
+
+def test_image_viewer_fit_tracks_viewport_resize_and_keeps_image_visible() -> None:
+    from defleco_lab.gui.image_viewer import ImageViewer
+
+    app = _app()
+    viewer = ImageViewer()
+    viewer.resize(900, 600)
+    viewer.show()
+    viewer.set_array(np.zeros((1000, 1600), np.uint8))
+    app.processEvents()
+
+    first_scale = viewer.transform().m11()
+    first_bounds = viewer.mapFromScene(viewer._pixmap.boundingRect()).boundingRect()
+    first_viewport = viewer.viewport().rect()
+    assert first_bounds.left() >= first_viewport.left() - 2
+    assert first_bounds.top() >= first_viewport.top() - 2
+    assert first_bounds.right() <= first_viewport.right() + 2
+    assert first_bounds.bottom() <= first_viewport.bottom() + 2
+    assert viewer.horizontalScrollBar().maximum() == 0
+    assert viewer.verticalScrollBar().maximum() == 0
+
+    viewer.resize(520, 300)
+    app.processEvents()
+    second_scale = viewer.transform().m11()
+    second_bounds = viewer.mapFromScene(viewer._pixmap.boundingRect()).boundingRect()
+    second_viewport = viewer.viewport().rect()
+    assert second_scale < first_scale
+    assert second_bounds.left() >= second_viewport.left() - 2
+    assert second_bounds.top() >= second_viewport.top() - 2
+    assert second_bounds.right() <= second_viewport.right() + 2
+    assert second_bounds.bottom() <= second_viewport.bottom() + 2
+    assert viewer.horizontalScrollBar().maximum() == 0
+    assert viewer.verticalScrollBar().maximum() == 0
+
+    viewer.actual_size()
+    app.processEvents()
+    assert (
+        viewer.horizontalScrollBar().maximum() > 0
+        or viewer.verticalScrollBar().maximum() > 0
+    )
+    viewer.close()
+
+
+def test_main_window_left_workflows_are_tabbed_and_scrollable() -> None:
+    from defleco_lab.gui.main_window import MainWindow
+
+    app = _app()
+    window = MainWindow()
+    window.resize(1280, 720)
+    window.show()
+    app.processEvents()
+
+    tabified = set(window.tabifiedDockWidgets(window.input_dock))
+    assert window.pattern_dock in tabified
+    assert window.experiment_dock in tabified
+    assert isinstance(window.input_dock.widget(), QtWidgets.QScrollArea)
+    assert isinstance(window.pattern_dock.widget(), QtWidgets.QScrollArea)
+    assert isinstance(window.experiment_dock.widget(), QtWidgets.QScrollArea)
+    assert window.minimumSizeHint().height() <= 720
+
+    window.close()
+    app.processEvents()
+
+
+def test_initial_window_size_fits_dpi_scaled_fhd_work_areas() -> None:
+    from defleco_lab.gui.main_window import _bounded_initial_size
+
+    for available in (
+        QtCore.QSize(1920, 1040),
+        QtCore.QSize(1536, 832),
+        QtCore.QSize(1280, 680),
+    ):
+        target = _bounded_initial_size(available)
+        assert target.width() <= available.width()
+        assert target.height() <= available.height()
+        assert target.height() >= min(600, available.height())
