@@ -56,13 +56,13 @@ def build_pattern_cases(profile: str = "quick") -> list[PatternCase]:
     """Build a bounded, interpretable screening set rather than a Cartesian explosion."""
 
     if profile == "extended":
-        periods = [14.0, 20.0, 28.0, 40.0]
+        periods = [32.0, 48.0, 64.0, 80.0]
         stripe_angles = [0.0, 30.0, 60.0, 90.0, 120.0, 150.0]
         checker_angles = [0.0, 15.0, 30.0, 45.0, 60.0, 75.0]
         spiral_angles = stripe_angles
         ring_phases = [0.0, 60.0, 120.0, 180.0, 240.0, 300.0]
     else:
-        periods = [20.0, 32.0]
+        periods = [48.0, 64.0]
         stripe_angles = [0.0, 45.0, 90.0, 135.0]
         checker_angles = [0.0, 15.0, 30.0, 45.0]
         spiral_angles = [0.0, 45.0, 90.0, 135.0]
@@ -75,10 +75,14 @@ def build_pattern_cases(profile: str = "quick") -> list[PatternCase]:
         cases.extend(_angle_group("spiral", period, spiral_angles))
         cases.extend(_phase_group("rings", period, ring_phases))
 
+    if profile != "extended":
+        # One deterministic phase sweep around the empirically useful ~50 px scale.
+        cases.extend(_phase_group("stripes", 48.0, [0.0, 90.0, 180.0, 270.0]))
+
     if profile == "extended":
         # Reuse additional families from the standalone V02 generator, but keep
         # their sweep intentionally smaller than the four primary families.
-        extra_periods = [20.0, 32.0]
+        extra_periods = [48.0, 64.0]
         extra_angles = [0.0, 15.0, 30.0, 45.0]
         for period in extra_periods:
             for family in ("composite", "nested_square", "squircle", "counter_spiral"):
@@ -169,36 +173,17 @@ def default_analysis_recipes(profile: str = "quick") -> list[AnalysisRecipe]:
             },
         ),
         AnalysisRecipe(
-            "tensor_orientation_residual",
-            "structure_tensor",
+            "fringe_line_geometry",
+            "fringe_line_geometry",
             {
-                "operator": "scharr",
-                "derivative_sigma": 0.8,
-                "tensor_sigma": 2.0,
-                "orientation_smooth_sigma": 8.0,
-                "output": "orientation_residual",
-            },
-        ),
-        AnalysisRecipe(
-            "tensor_linearity_suppressed",
-            "structure_tensor",
-            {
-                "operator": "scharr",
-                "derivative_sigma": 0.8,
-                "tensor_sigma": 2.0,
-                "orientation_smooth_sigma": 8.0,
-                "output": "linearity_suppressed",
-            },
-        ),
-        AnalysisRecipe(
-            "tensor_junction",
-            "structure_tensor",
-            {
-                "operator": "scharr",
-                "derivative_sigma": 0.8,
-                "tensor_sigma": 2.0,
-                "orientation_smooth_sigma": 8.0,
-                "output": "junction_response",
+                "blur_sigma": 0.8,
+                "min_length_px": 20.0,
+                "neighbor_radius_px": 80.0,
+                "orientation_gate_deg": 25.0,
+                "min_neighbors": 2,
+                "max_segments": 1000,
+                "line_thickness": 2,
+                "output": "geometry_residual",
             },
         ),
         AnalysisRecipe(
@@ -228,16 +213,38 @@ def default_analysis_recipes(profile: str = "quick") -> list[AnalysisRecipe]:
                 "output": "range",
             },
         ),
-        AnalysisRecipe(
-            "directional_line_residual",
-            "directional_residual",
-            {"orientations": 8, "length": 21},
-        ),
     ]
 
     if profile == "extended":
         recipes.extend(
             [
+                AnalysisRecipe(
+                    "tensor_orientation_residual",
+                    "structure_tensor",
+                    {
+                        "operator": "scharr",
+                        "derivative_sigma": 0.8,
+                        "tensor_sigma": 2.0,
+                        "orientation_smooth_sigma": 8.0,
+                        "output": "orientation_residual",
+                    },
+                ),
+                AnalysisRecipe(
+                    "tensor_linearity_suppressed",
+                    "structure_tensor",
+                    {
+                        "operator": "scharr",
+                        "derivative_sigma": 0.8,
+                        "tensor_sigma": 2.0,
+                        "orientation_smooth_sigma": 8.0,
+                        "output": "linearity_suppressed",
+                    },
+                ),
+                AnalysisRecipe(
+                    "directional_line_residual",
+                    "directional_residual",
+                    {"orientations": 8, "length": 21},
+                ),
                 AnalysisRecipe(
                     "scharr_vector_residual",
                     "gradient",

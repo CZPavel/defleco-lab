@@ -23,6 +23,7 @@ def image():
         StructureTensor(),
         GaborBank(periods=[12], orientations=4),
         DirectionalResidual(length=11),
+        FringeLineGeometry(min_length_px=8, max_segments=300),
     ],
 )
 def test_every_filter_returns_correct_size_finite_output(method):
@@ -121,3 +122,21 @@ def test_structure_tensor_junction_response_is_finite() -> None:
     )
     assert result.primary.shape == a.shape
     assert np.isfinite(result.primary).all()
+
+
+
+def test_fringe_line_geometry_extracts_explicit_vector_segments() -> None:
+    a = np.zeros((160, 220), np.float32)
+    for x in range(20, 210, 30):
+        cv2.line(a, (x, 10), (x, 150), 255, 3)
+
+    result = FringeLineGeometry(
+        min_length_px=20,
+        neighbor_radius_px=70,
+        max_segments=500,
+        output="vector_lines",
+    ).process([a], keep_intermediates=True)
+
+    assert result.diagnostics["line_count"] > 0
+    assert np.count_nonzero(result.primary) > 0
+    assert "geometry_residual" in result.intermediates

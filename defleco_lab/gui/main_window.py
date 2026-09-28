@@ -66,6 +66,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.replay = []
         self.replay_index = 0
         self.recorder: AsyncSessionRecorder | None = None
+        self._recording_started = 0.0
         self.camera_worker: BaslerAcquisitionWorker | None = None
         self._camera_error_active = False
         self._camera_error_message = ""
@@ -102,6 +103,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.camera_timer = QtCore.QTimer(self)
         self.camera_timer.setInterval(33)
         self.camera_timer.timeout.connect(self._poll_camera_frames)
+        self.recording_timer = QtCore.QTimer(self)
+        self.recording_timer.setInterval(250)
+        self.recording_timer.timeout.connect(self._update_recording_status)
         self.visualization_timer = QtCore.QTimer(self)
         self.visualization_timer.setSingleShot(True)
         self.visualization_timer.setInterval(60)
@@ -118,6 +122,59 @@ class MainWindow(QtWidgets.QMainWindow):
         QtCore.QTimer.singleShot(0, self._finish_initial_layout)
         self.statusBar().showMessage("Ready - synthetic source - camera idle")
         self._next_frame()
+
+    def _source_is_producing_frames(self) -> bool:
+        source = self.source_combo.currentText() if hasattr(self, "source_combo") else ""
+        if source == "Basler":
+            return self.camera_worker is not None and self.camera_worker.isRunning()
+        return self.timer.isActive()
+
+    def _update_recording_status(self) -> None:
+        recorder = self.recorder
+        if recorder is None:
+            return
+        elapsed = max(0, round(perf_counter() - self._recording_started))
+        minutes, seconds = divmod(elapsed, 60)
+        self.recording_status.setText(
+            f"● REC {minutes:02d}:{seconds:02d} | written {recorder.written_frames} "
+            f"| queued {recorder.queue_size} | dropped {recorder.dropped}\n"
+            f"{recorder.output_path}"
+        )
+        self.recording_status.setStyleSheet("color: #ff6b6b; font-weight: 700;")
+
+    def _add_roi(self, roi_type: str) -> None:
+        self.tabs.setCurrentIndex(0)
+        if not self.original.add_default_roi(roi_type):
+            self.statusBar().showMessage(
+                "ROI cannot be created before an image is available. Start Live or load a frame first."
+            )
+            return
+        self._update_roi_status()
+        self.statusBar().showMessage(
+            f"{roi_type.title()} ROI created. Drag the box to move it; drag a white corner to resize."
+        )
+
+    def _delete_selected_roi(self) -> None:
+        self.tabs.setCurrentIndex(0)
+        self.original.delete_selected()
+        self._update_roi_status()
+
+    def _clear_rois(self) -> None:
+        self.original.clear_rois()
+        self._update_roi_status()
+        self.statusBar().showMessage("All ROIs cleared")
+
+    def _update_roi_status(self) -> None:
+        analysis = len(self.original.rois("analysis"))
+        motion = len(self.original.rois("motion"))
+        if hasattr(self, "roi_status"):
+            self.roi_status.setText(f"A{analysis} | M{motion}")
+        if hasattr(self, "roi_inline_status"):
+            self.roi_inline_status.setText(
+                f"Analysis ROI: {analysis} | Motion ROI: {motion}"
+            )
+        if hasattr(self, "motion_roi_status"):
+            self.motion_roi_status.setText(f"Motion ROI: {motion}")
 
     def _build_ui(self) -> None:
         self.tabs = QtWidgets.QTabWidget()
@@ -169,6 +226,42 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         toolbar.addWidget(self.metrics)
 
+        roi_toolbar = self.addToolBar("ROI tools")
+        roi_toolbar.setObjectName("roi_tools_toolbar")
+        for text, slot, tip in (
+            (
+                "Add Analysis ROI",
+                lambda: self._add_roi("analysis"),
+                "Create a movable/resizable Analysis ROI in the Original camera view.",
+            ),
+            (
+                "Add Motion ROI",
+                lambda: self._add_roi("motion"),
+                "Create a Motion ROI used for vehicle translation estimation.",
+            ),
+            (
+                "Delete selected ROI",
+                self._delete_selected_roi,
+                "Delete the currently selected ROI box.",
+            ),
+            (
+                "Clear ROIs",
+                self._clear_rois,
+                "Remove all Analysis and Motion ROIs.",
+            ),
+        ):
+            action = QtGui.QAction(text, self)
+            action.setToolTip(tip)
+            action.triggered.connect(slot)
+            roi_toolbar.addAction(action)
+        self.roi_status = QtWidgets.QLabel("A0 | M0")
+        self.roi_status.setToolTip(
+            "A = Analysis ROI count, M = Motion ROI count. ROI boxes are edited in Original view."
+        )
+        roi_toolbar.addSeparator()
+        roi_toolbar.addWidget(self.roi_status)
+        self.original.roiChanged.connect(self._update_roi_status)
+
         self.input_dock = QtWidgets.QDockWidget("Input / Camera / Session", self)
         self.input_dock.setObjectName("input_camera_session_dock")
         panel = QtWidgets.QWidget()
@@ -211,22 +304,38 @@ class MainWindow(QtWidgets.QMainWindow):
         form.addRow(row)
         self.live_btn.clicked.connect(self._start)
         self.stop_btn.clicked.connect(self._stop)
+        roi_help = QtWidgets.QLabel(
+            "ROI: click Add to create a visible box in the camera image. Drag the box "
+            "to move it and drag a white corner handle to resize it. Analysis ROI limits "
+            "processing; Motion ROI is used to estimate vehicle travel."
+        )
+        roi_help.setWordWrap(True)
+        form.addRow(roi_help)
         roi_row = QtWidgets.QHBoxLayout()
-        a = QtWidgets.QPushButton("Draw Analysis ROI")
-        m = QtWidgets.QPushButton("Draw Motion ROI")
-        roi_row.addWidget(a)
-        roi_row.addWidget(m)
+        self.add_analysis_roi_btn = QtWidgets.QPushButton("Add Analysis ROI")
+        self.add_motion_roi_btn = QtWidgets.QPushButton("Add Motion ROI")
+        roi_row.addWidget(self.add_analysis_roi_btn)
+        roi_row.addWidget(self.add_motion_roi_btn)
         form.addRow(roi_row)
-        a.clicked.connect(lambda: self.original.begin_roi("analysis"))
-        m.clicked.connect(lambda: self.original.begin_roi("motion"))
+        self.add_analysis_roi_btn.clicked.connect(lambda: self._add_roi("analysis"))
+        self.add_motion_roi_btn.clicked.connect(lambda: self._add_roi("motion"))
+        self.roi_inline_status = QtWidgets.QLabel("Analysis ROI: 0 | Motion ROI: 0")
+        form.addRow(self.roi_inline_status)
+
         rec_row = QtWidgets.QHBoxLayout()
-        rec = QtWidgets.QPushButton("Record")
-        rec_stop = QtWidgets.QPushButton("Stop record")
-        rec_row.addWidget(rec)
-        rec_row.addWidget(rec_stop)
+        self.record_btn = QtWidgets.QPushButton("Record")
+        self.record_stop_btn = QtWidgets.QPushButton("Stop record")
+        self.record_stop_btn.setEnabled(False)
+        rec_row.addWidget(self.record_btn)
+        rec_row.addWidget(self.record_stop_btn)
         form.addRow(rec_row)
-        rec.clicked.connect(self._record)
-        rec_stop.clicked.connect(self._record_stop)
+        self.recording_status = QtWidgets.QLabel(
+            "Not recording. Start Live first, then choose a parent folder."
+        )
+        self.recording_status.setWordWrap(True)
+        form.addRow(self.recording_status)
+        self.record_btn.clicked.connect(self._record)
+        self.record_stop_btn.clicked.connect(self._record_stop)
         load = QtWidgets.QPushButton("Load session...")
         load.clicked.connect(self._load_session)
         form.addRow(load)
@@ -319,8 +428,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.motion_group = QtWidgets.QGroupBox("Motion compensation (advanced)")
         motion_form = QtWidgets.QFormLayout(self.motion_group)
         motion_hint = QtWidgets.QLabel(
-            "Use only when the vehicle/object moves between frames. For the current "
-            "static-car experiments this can stay disabled."
+            "Use only when the vehicle/object moves between frames. Auto mode needs at "
+            "least one orange Motion ROI. Place it on texture/features that move with the "
+            "vehicle but are not dominated by the changing reflected pattern."
         )
         motion_hint.setWordWrap(True)
         motion_form.addRow(motion_hint)
@@ -348,6 +458,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.max_shift.setRange(0.1, 10000)
         self.max_shift.setValue(50.0)
         motion_form.addRow(self.comp)
+        motion_roi_button = QtWidgets.QPushButton("Add / edit Motion ROI")
+        motion_roi_button.clicked.connect(lambda: self._add_roi("motion"))
+        motion_form.addRow(motion_roi_button)
+        self.motion_roi_status = QtWidgets.QLabel("Motion ROI: 0")
+        motion_form.addRow(self.motion_roi_status)
         motion_form.addRow("Motion axis", self.motion_axis)
         motion_form.addRow("Motion mode", self.motion_mode)
         motion_form.addRow("Manual px/frame", self.manual_shift)
@@ -1026,7 +1141,15 @@ class MainWindow(QtWidgets.QMainWindow):
         motion_rois = [
             {k: roi[k] for k in ("x", "y", "width", "height", "name", "enabled")}
             for roi in self.original.rois("motion")
+            if roi.get("enabled", True)
         ]
+        if self.comp.isChecked() and self.motion_mode.currentText() == "auto" and not motion_rois:
+            self.tabs.setCurrentIndex(0)
+            self.statusBar().showMessage(
+                "Auto motion compensation needs a Motion ROI. Use Add Motion ROI, "
+                "move it onto stable vehicle texture, then process again."
+            )
+            return
         analysis_rois = []
         if self.analysis_only.isChecked():
             analysis_rois = [
@@ -1249,22 +1372,73 @@ class MainWindow(QtWidgets.QMainWindow):
         self.statusBar().showMessage("Compare reference stored with a shared display range")
 
     def _record(self):
-        root = QtWidgets.QFileDialog.getExistingDirectory(self, "Session root")
-        if root:
+        if self.recorder is not None:
+            self.statusBar().showMessage("Recording is already active")
+            return
+        if not self._source_is_producing_frames():
+            self.recording_status.setText(
+                "Recording not started: the selected source is not producing frames. "
+                "Press Live first."
+            )
+            self.recording_status.setStyleSheet("color: #ffb74d;")
+            self.statusBar().showMessage(
+                "Recording not started: press Live first so new frames are arriving."
+            )
+            return
+        root = QtWidgets.QFileDialog.getExistingDirectory(
+            self, "Choose parent folder for raw session"
+        )
+        if not root:
+            return
+        try:
             self.recorder = AsyncSessionRecorder(Path(root), self.notes.toPlainText())
-            self.statusBar().showMessage("Recording raw frames")
+        except OSError as exc:
+            self.recording_status.setText(f"Recording could not start: {exc}")
+            self.recording_status.setStyleSheet("color: #ff6b6b;")
+            self.statusBar().showMessage(f"Recorder: {exc}")
+            return
+        self._recording_started = perf_counter()
+        self.record_btn.setEnabled(False)
+        self.record_stop_btn.setEnabled(True)
+        self.recording_timer.start()
+        self._update_recording_status()
+        self.statusBar().showMessage(
+            f"Recording raw frames to {self.recorder.output_path}"
+        )
 
     def _record_stop(self):
-        if self.recorder:
-            recorder = self.recorder
+        recorder = self.recorder
+        if recorder is None:
+            self.recording_status.setText("Not recording.")
+            self.recording_status.setStyleSheet("")
+            self.statusBar().showMessage("No recording is active")
+            return
+        self.recording_timer.stop()
+        try:
             path = recorder.close()
-            self.recorder = None
-            if recorder.dropped:
-                self.statusBar().showMessage(
-                    f"Session saved: {path} | WARNING: recorder dropped {recorder.dropped} item(s)"
+            frames = recorder.written_frames
+            dropped = recorder.dropped
+            if frames == 0:
+                message = (
+                    f"Session saved with 0 frames: {path}. "
+                    "No new frames arrived while REC was active."
                 )
+                self.recording_status.setStyleSheet("color: #ffb74d;")
             else:
-                self.statusBar().showMessage(f"Session saved: {path} | recorder drops: 0")
+                message = f"Saved {frames} raw frame(s): {path}"
+                if dropped:
+                    message += f" | WARNING: dropped {dropped}"
+                self.recording_status.setStyleSheet("color: #8bc34a;")
+            self.recording_status.setText(message)
+            self.statusBar().showMessage(message)
+        except (OSError, TimeoutError) as exc:
+            self.recording_status.setText(f"Recorder stop error: {exc}")
+            self.recording_status.setStyleSheet("color: #ff6b6b;")
+            self.statusBar().showMessage(f"Recorder stop error: {exc}")
+        finally:
+            self.recorder = None
+            self.record_btn.setEnabled(True)
+            self.record_stop_btn.setEnabled(False)
 
     def _load_session(self):
         path = QtWidgets.QFileDialog.getExistingDirectory(self, "Open recorded session")

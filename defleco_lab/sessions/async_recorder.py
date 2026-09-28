@@ -16,6 +16,8 @@ class AsyncSessionRecorder:
         self._recorder = SessionRecorder(root, notes)
         self._queue: Queue[object] = Queue(maxsize=capacity)
         self.dropped = 0
+        self.accepted_frames = 0
+        self.written_frames = 0
         self.error: str | None = None
         self._thread = Thread(target=self._run, name="defleco-recorder", daemon=True)
         self._thread.start()
@@ -24,9 +26,14 @@ class AsyncSessionRecorder:
     def queue_size(self) -> int:
         return self._queue.qsize()
 
+    @property
+    def output_path(self) -> Path:
+        return self._recorder.path
+
     def append(self, packet: FramePacket) -> bool:
         try:
             self._queue.put_nowait(packet.copy_owned())
+            self.accepted_frames += 1
             return True
         except Full:
             self.dropped += 1
@@ -70,5 +77,6 @@ class AsyncSessionRecorder:
                     self._recorder.update_motion(*packet[1:])
                 else:
                     self._recorder.append(packet)
+                    self.written_frames += 1
         except Exception as exc:  # recorder error is reported to the GUI on close
             self.error = str(exc)

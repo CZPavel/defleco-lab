@@ -537,3 +537,233 @@ class DirectionalResidual(ProcessingMethod):
             kernel /= kernel.sum()
             best = np.minimum(best, np.abs(a - cv2.filter2D(a, cv2.CV_32F, kernel)))
         return ProcessingResult(best, {"residual": best})
+
+
+
+class FringeLineGeometry(ProcessingMethod):
+    info = MethodInfo(
+        "fringe_line_geometry",
+        "Fringe Line Geometry (vector)",
+        "Single frame",
+        1,
+        False,
+        (
+            "Extracts explicit line segments from reflected-pattern markants and "
+            "compares each segment with nearby segments from the same orientation family."
+        ),
+        recommended_use=(
+            "Binary or high-contrast stripes/checker/spiral around the current ~50 px "
+            "display scale. Inspect Vector lines first, then Geometry residual."
+        ),
+        limitations=(
+            "First geometry model: local orientation consistency only. Connected polylines, "
+            "line spacing and spline/polynomial prediction remain planned extensions."
+        ),
+        parameters={
+            "blur_sigma": {
+                "default": 0.8,
+                "minimum": 0.0,
+                "maximum": 20.0,
+                "step": 0.1,
+                "units": "px",
+                "tooltip": "Small detector pre-blur before line-segment extraction.",
+            },
+            "min_length_px": {
+                "default": 20.0,
+                "minimum": 2.0,
+                "maximum": 1000.0,
+                "step": 2.0,
+                "units": "px",
+                "tooltip": "Reject short detector fragments below this vector length.",
+            },
+            "neighbor_radius_px": {
+                "default": 80.0,
+                "minimum": 5.0,
+                "maximum": 1000.0,
+                "step": 5.0,
+                "units": "px",
+                "tooltip": "Local radius used to predict the normal line direction.",
+            },
+            "orientation_gate_deg": {
+                "default": 25.0,
+                "minimum": 1.0,
+                "maximum": 90.0,
+                "step": 1.0,
+                "units": "deg",
+                "tooltip": (
+                    "Only similarly oriented neighbors predict a segment, so normal "
+                    "checkerboard X/Y crossings are not averaged together."
+                ),
+            },
+            "min_neighbors": {
+                "default": 2,
+                "minimum": 1,
+                "maximum": 20,
+                "tooltip": "Minimum similar nearby segments needed for a prediction.",
+            },
+            "max_segments": {
+                "default": 1000,
+                "minimum": 50,
+                "maximum": 5000,
+                "step": 50,
+                "tooltip": "Bound vector count to keep live processing predictable.",
+            },
+            "line_thickness": {
+                "default": 2,
+                "minimum": 1,
+                "maximum": 12,
+                "tooltip": "Raster display thickness for vector-derived maps.",
+            },
+            "output": {
+                "default": "geometry_residual",
+                "choices": [
+                    "geometry_residual",
+                    "vector_lines",
+                    "segment_orientation",
+                    "segment_length",
+                ],
+                "tooltip": (
+                    "Vector lines shows what was actually extracted. Geometry residual "
+                    "shows local angular deviation from same-family neighboring segments."
+                ),
+            },
+        },
+    )
+
+    def _process(self, frames, **context):
+        source = gray32(frames[-1])
+        a = _blur(source, self.parameters["blur_sigma"])
+        finite = np.nan_to_num(a.astype(np.float32))
+        lo, hi = np.percentile(finite, [1.0, 99.0])
+        normalized = np.clip(
+            (finite - float(lo)) * 255.0 / max(float(hi - lo), 1e-6),
+            0,
+            255,
+        ).astype(np.uint8)
+
+        detector = cv2.createLineSegmentDetector(cv2.LSD_REFINE_STD)
+        detected = detector.detect(normalized)[0]
+        shape = source.shape[:2]
+        empty = np.zeros(shape, np.float32)
+        keep_intermediates = context.get("keep_intermediates", True)
+        if detected is None:
+            return ProcessingResult(
+                empty,
+                {"vector_lines": empty.copy()} if keep_intermediates else {},
+                diagnostics={"line_count": 0},
+            )
+
+        segments = detected[:, 0, :].astype(np.float32)
+        delta = segments[:, 2:4] - segments[:, 0:2]
+        lengths = np.hypot(delta[:, 0], delta[:, 1])
+        keep = lengths >= float(self.parameters["min_length_px"])
+        segments = segments[keep]
+        lengths = lengths[keep]
+        if not len(segments):
+            return ProcessingResult(
+                empty,
+                {"vector_lines": empty.copy()} if keep_intermediates else {},
+                diagnostics={"line_count": 0},
+            )
+
+        maximum = int(self.parameters["max_segments"])
+        if len(segments) > maximum:
+            order = np.argsort(lengths)[-maximum:]
+            segments = segments[order]
+            lengths = lengths[order]
+
+        delta = segments[:, 2:4] - segments[:, 0:2]
+        midpoints = (segments[:, 0:2] + segments[:, 2:4]) * 0.5
+        angles = np.mod(np.arctan2(delta[:, 1], delta[:, 0]), np.pi).astype(np.float32)
+        residual = np.zeros(len(segments), np.float32)
+        neighbor_count = np.zeros(len(segments), np.int32)
+
+        radius = float(self.parameters["neighbor_radius_px"])
+        radius2 = radius * radius
+        gate = np.deg2rad(float(self.parameters["orientation_gate_deg"]))
+        min_neighbors = int(self.parameters["min_neighbors"])
+        for index in range(len(segments)):
+            spatial = midpoints - midpoints[index]
+            dist2 = np.sum(spatial * spatial, axis=1)
+            angular = 0.5 * np.abs(
+                np.arctan2(
+                    np.sin(2.0 * (angles - angles[index])),
+                    np.cos(2.0 * (angles - angles[index])),
+                )
+            )
+            mask = (dist2 > 0.0) & (dist2 <= radius2) & (angular <= gate)
+            count = int(np.count_nonzero(mask))
+            neighbor_count[index] = count
+            if count < min_neighbors:
+                continue
+            weights = lengths[mask] * np.exp(-dist2[mask] / max(2.0 * radius2, 1e-6))
+            c = float(np.sum(weights * np.cos(2.0 * angles[mask])))
+            s = float(np.sum(weights * np.sin(2.0 * angles[mask])))
+            expected = 0.5 * np.arctan2(s, c)
+            residual[index] = abs(
+                0.5
+                * np.arctan2(
+                    np.sin(2.0 * (angles[index] - expected)),
+                    np.cos(2.0 * (angles[index] - expected)),
+                )
+            )
+
+        line_mask = np.zeros(shape, np.float32)
+        residual_map = np.zeros(shape, np.float32)
+        orientation_map = np.zeros(shape, np.float32)
+        length_map = np.zeros(shape, np.float32)
+        thickness = int(self.parameters["line_thickness"])
+
+        for index in np.argsort(residual):
+            x1, y1, x2, y2 = np.rint(segments[index]).astype(int)
+            pt1, pt2 = (x1, y1), (x2, y2)
+            cv2.line(line_mask, pt1, pt2, 1.0, thickness, cv2.LINE_AA)
+            cv2.line(
+                residual_map,
+                pt1,
+                pt2,
+                float(residual[index]),
+                thickness,
+                cv2.LINE_AA,
+            )
+            cv2.line(
+                orientation_map,
+                pt1,
+                pt2,
+                float(angles[index]),
+                thickness,
+                cv2.LINE_AA,
+            )
+            cv2.line(
+                length_map,
+                pt1,
+                pt2,
+                float(lengths[index]),
+                thickness,
+                cv2.LINE_AA,
+            )
+
+        outputs = {
+            "geometry_residual": residual_map,
+            "vector_lines": line_mask,
+            "segment_orientation": orientation_map,
+            "segment_length": length_map,
+        }
+        primary = outputs[str(self.parameters["output"])]
+        diagnostics = {
+            "line_count": int(len(segments)),
+            "median_line_length_px": float(np.median(lengths)),
+            "median_neighbors": float(np.median(neighbor_count)),
+        }
+        if not keep_intermediates:
+            return ProcessingResult(primary, diagnostics=diagnostics)
+        return ProcessingResult(
+            primary,
+            {
+                "vector_lines": line_mask,
+                "geometry_residual": residual_map,
+                "segment_orientation": orientation_map,
+                "segment_length": length_map,
+            },
+            diagnostics=diagnostics,
+        )

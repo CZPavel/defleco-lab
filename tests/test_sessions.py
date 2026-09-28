@@ -35,3 +35,15 @@ def test_late_motion_metadata_update_round_trip(tmp_path: Path):
     assert loaded[0].estimated_motion_px == 2.5
     assert loaded[0].motion_quality == 0.91
     assert loaded[0].cumulative_position_px == 8.0
+
+
+
+def test_empty_session_is_structurally_valid_and_unique(tmp_path: Path):
+    first = SessionRecorder(tmp_path, "empty")
+    first_path = first.close()
+    second = SessionRecorder(tmp_path, "empty2")
+    second_path = second.close()
+
+    assert first_path != second_path
+    assert (first_path / "metadata.csv").exists()
+    assert load_session(first_path) == []

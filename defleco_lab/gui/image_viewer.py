@@ -4,7 +4,45 @@ import numpy as np
 from PySide6 import QtCore, QtGui, QtWidgets
 
 
+class _RoiHandle(QtWidgets.QGraphicsRectItem):
+    SIZE = 10.0
+
+    def __init__(self, corner: str, parent: "RoiItem") -> None:
+        half = self.SIZE / 2.0
+        super().__init__(-half, -half, self.SIZE, self.SIZE, parent)
+        self.corner = corner
+        self.setBrush(QtGui.QColor("#f2f5f7"))
+        self.setPen(QtGui.QPen(QtGui.QColor("#11151a"), 1))
+        self.setFlag(
+            QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations,
+            True,
+        )
+        self.setZValue(10)
+        self.setCursor(
+            QtCore.Qt.CursorShape.SizeFDiagCursor
+            if corner in {"tl", "br"}
+            else QtCore.Qt.CursorShape.SizeBDiagCursor
+        )
+
+    def mousePressEvent(self, event: QtWidgets.QGraphicsSceneMouseEvent) -> None:
+        event.accept()
+
+    def mouseMoveEvent(self, event: QtWidgets.QGraphicsSceneMouseEvent) -> None:
+        parent = self.parentItem()
+        if isinstance(parent, RoiItem):
+            parent.resize_from_handle(self.corner, parent.mapFromScene(event.scenePos()))
+        event.accept()
+
+    def mouseReleaseEvent(self, event: QtWidgets.QGraphicsSceneMouseEvent) -> None:
+        parent = self.parentItem()
+        if isinstance(parent, RoiItem):
+            parent.notify_changed()
+        event.accept()
+
+
 class RoiItem(QtWidgets.QGraphicsRectItem):
+    MIN_SIZE = 16.0
+
     def __init__(self, rect: QtCore.QRectF, roi_type: str, name: str) -> None:
         super().__init__(rect)
         self.roi_type, self.name = roi_type, name
@@ -17,9 +55,82 @@ class RoiItem(QtWidgets.QGraphicsRectItem):
             | QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
             | QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges
         )
-        self.setToolTip(
-            f"{roi_type.title()} ROI: {name}. Select and use +/- to resize, Delete to remove."
+        self.setZValue(5)
+        self._label = QtWidgets.QGraphicsSimpleTextItem(self)
+        self._label.setBrush(color.lighter(130))
+        self._label.setFlag(
+            QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations,
+            True,
         )
+        self._handles = {
+            corner: _RoiHandle(corner, self)
+            for corner in ("tl", "tr", "bl", "br")
+        }
+        self._update_visuals()
+        self.setToolTip(
+            f"{roi_type.title()} ROI: {name}. Drag the box to move it; "
+            "drag a white corner handle to resize; Delete removes it."
+        )
+
+    def _update_visuals(self) -> None:
+        rect = self.rect()
+        label_type = "ANALYSIS" if self.roi_type == "analysis" else "MOTION"
+        self._label.setText(f"{label_type}: {self.name}")
+        self._label.setPos(rect.topLeft() + QtCore.QPointF(6.0, 6.0))
+        for corner, point in {
+            "tl": rect.topLeft(),
+            "tr": rect.topRight(),
+            "bl": rect.bottomLeft(),
+            "br": rect.bottomRight(),
+        }.items():
+            self._handles[corner].setPos(point)
+
+    def resize_from_handle(self, corner: str, point: QtCore.QPointF) -> None:
+        rect = QtCore.QRectF(self.rect())
+        bounds = (
+            self.mapRectFromScene(self.scene().sceneRect())
+            if self.scene() is not None
+            else QtCore.QRectF()
+        )
+        x, y = point.x(), point.y()
+        if not bounds.isNull():
+            x = min(max(x, bounds.left()), bounds.right())
+            y = min(max(y, bounds.top()), bounds.bottom())
+        if "l" in corner:
+            rect.setLeft(min(x, rect.right() - self.MIN_SIZE))
+        else:
+            rect.setRight(max(x, rect.left() + self.MIN_SIZE))
+        if "t" in corner:
+            rect.setTop(min(y, rect.bottom() - self.MIN_SIZE))
+        else:
+            rect.setBottom(max(y, rect.top() + self.MIN_SIZE))
+        self.setRect(rect)
+        self._update_visuals()
+
+    def notify_changed(self) -> None:
+        scene = self.scene()
+        if scene is None:
+            return
+        for view in scene.views():
+            if isinstance(view, ImageViewer):
+                view.roiChanged.emit()
+
+    def itemChange(self, change, value):
+        if (
+            change == QtWidgets.QGraphicsItem.GraphicsItemChange.ItemPositionChange
+            and self.scene() is not None
+        ):
+            bounds = self.scene().sceneRect()
+            rect = self.rect()
+            if not bounds.isNull():
+                x = min(max(value.x(), bounds.left() - rect.left()), bounds.right() - rect.right())
+                y = min(max(value.y(), bounds.top() - rect.top()), bounds.bottom() - rect.bottom())
+                return QtCore.QPointF(x, y)
+        return super().itemChange(change, value)
+
+    def mouseReleaseEvent(self, event: QtWidgets.QGraphicsSceneMouseEvent) -> None:
+        super().mouseReleaseEvent(event)
+        self.notify_changed()
 
 
 class ImageViewer(QtWidgets.QGraphicsView):
@@ -185,6 +296,34 @@ class ImageViewer(QtWidgets.QGraphicsView):
     def begin_roi(self, roi_type: str) -> None:
         self._roi_mode = roi_type
         self.setDragMode(QtWidgets.QGraphicsView.DragMode.NoDrag)
+        self.viewport().setCursor(QtCore.Qt.CursorShape.CrossCursor)
+
+    def add_default_roi(self, roi_type: str) -> bool:
+        if self._pixmap.pixmap().isNull():
+            return False
+        bounds = self._pixmap.boundingRect()
+        width = min(max(64.0, bounds.width() * 0.35), bounds.width() * 0.8)
+        height = min(max(64.0, bounds.height() * 0.35), bounds.height() * 0.8)
+        rect = QtCore.QRectF(
+            bounds.center().x() - width / 2.0,
+            bounds.center().y() - height / 2.0,
+            width,
+            height,
+        )
+        for selected in self.scene().selectedItems():
+            selected.setSelected(False)
+        count = len(self.rois(roi_type)) + 1
+        item = RoiItem(rect, roi_type, f"ROI {count}")
+        self.scene().addItem(item)
+        item.setSelected(True)
+        self.roiChanged.emit()
+        return True
+
+    def clear_rois(self, roi_type: str | None = None) -> None:
+        for item in tuple(self.scene().items()):
+            if isinstance(item, RoiItem) and (roi_type is None or item.roi_type == roi_type):
+                self.scene().removeItem(item)
+        self.roiChanged.emit()
 
     def rois(self, roi_type: str | None = None) -> list[dict[str, object]]:
         items = []
@@ -295,6 +434,7 @@ class ImageViewer(QtWidgets.QGraphicsView):
                 self.roiChanged.emit()
             self._origin = None
             self._roi_mode = None
+            self.viewport().unsetCursor()
             self.setDragMode(QtWidgets.QGraphicsView.DragMode.ScrollHandDrag)
             return
         super().mouseReleaseEvent(event)

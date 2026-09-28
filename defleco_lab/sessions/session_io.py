@@ -29,7 +29,7 @@ FIELDS = (
 
 class SessionRecorder:
     def __init__(self, root: Path, notes: str = "") -> None:
-        stamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+        stamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S_%f")
         self.path = Path(root) / f"session_{stamp}.partial"
         self.frames = self.path / "frames"
         self.results = self.path / "results"
@@ -37,6 +37,7 @@ class SessionRecorder:
         self.results.mkdir()
         self.notes = notes
         self.rows: list[dict[str, object]] = []
+        self._write_metadata()
         self._write_manifest(False)
 
     def append(self, packet: FramePacket) -> None:
@@ -71,6 +72,7 @@ class SessionRecorder:
             writer.writerows(self.rows)
 
     def close(self) -> Path:
+        self._write_metadata()
         self._write_manifest(True)
         final = self.path.with_name(self.path.name.removesuffix(".partial"))
         self.path.rename(final)

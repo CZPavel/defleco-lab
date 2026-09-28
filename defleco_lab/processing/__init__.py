@@ -12,6 +12,7 @@ for _method in (
     StructureTensor,
     GaborBank,
     DirectionalResidual,
+    FringeLineGeometry,
     FrameDifference,
     TemporalStatistics,
     TemporalMedianResidual,

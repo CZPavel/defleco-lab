@@ -12,7 +12,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 @dataclass(frozen=True, slots=True)
 class PatternSettings:
     family: str = "stripes"
-    period_px: float = 24.0
+    period_px: float = 50.0
     angle_deg: float = 0.0
     phase_deg: float = 0.0
     brightness: float = 100.0
@@ -20,7 +20,15 @@ class PatternSettings:
     waveform: str = "binary"
     mode: str = "static"
     speed_deg_s: float = 20.0
+    phase_speed_cycles_s: float = 0.0
+    breathing_depth_percent: float = 0.0
+    breathing_hz: float = 0.5
     step_deg: float = 15.0
+    step_target: str = "angle"
+    center_x_percent: float = 0.0
+    center_y_percent: float = 0.0
+    phase_tilt_x_deg: float = 0.0
+    phase_tilt_y_deg: float = 0.0
     render_scale: float = 0.5
     animation_fps: int = 20
     duty_percent: float = 50.0
@@ -48,8 +56,19 @@ def render_pattern(width: int, height: int, settings: PatternSettings) -> np.nda
     duty = np.clip(float(settings.duty_percent) / 100.0, 0.01, 0.99)
     phase_cycles = (float(settings.phase_deg) % 360.0) / 360.0
 
-    x = (np.arange(width, dtype=np.float32) - (width - 1) / 2.0)[None, :]
-    y = (np.arange(height, dtype=np.float32) - (height - 1) / 2.0)[:, None]
+    center_x = (width - 1) / 2.0 + width * float(settings.center_x_percent) / 100.0
+    center_y = (height - 1) / 2.0 + height * float(settings.center_y_percent) / 100.0
+    x = (np.arange(width, dtype=np.float32) - center_x)[None, :]
+    y = (np.arange(height, dtype=np.float32) - center_y)[:, None]
+    phase_field: float | np.ndarray = phase_cycles
+    if float(settings.phase_tilt_x_deg) != 0.0:
+        phase_field = phase_field + (
+            float(settings.phase_tilt_x_deg) / 360.0
+        ) * x / max(1.0, float(width - 1))
+    if float(settings.phase_tilt_y_deg) != 0.0:
+        phase_field = phase_field + (
+            float(settings.phase_tilt_y_deg) / 360.0
+        ) * y / max(1.0, float(height - 1))
     angle = math.radians(float(settings.angle_deg))
     c_angle, s_angle = math.cos(angle), math.sin(angle)
     family = settings.family
@@ -69,23 +88,22 @@ def render_pattern(width: int, height: int, settings: PatternSettings) -> np.nda
 
     if family == "checker":
         assert xr is not None and yr is not None
-        phase_px = phase_cycles * period
-        ix = np.floor((xr + phase_px) / period).astype(np.int32)
-        iy = np.floor((yr + phase_px) / period).astype(np.int32)
+        ix = np.floor(xr / period + phase_field).astype(np.int32)
+        iy = np.floor(yr / period + phase_field).astype(np.int32)
         signal = ((ix + iy) % 2 == 0).astype(np.float32)
     elif family == "rings":
         radius = np.hypot(x, y)
-        cycles = radius / period + phase_cycles
+        cycles = radius / period + phase_field
         signal = _carrier(cycles, settings.waveform, duty)
     elif family == "composite":
         assert xr is not None and yr is not None
-        x_signal = _carrier(xr / period + phase_cycles, settings.waveform, duty)
-        y_signal = _carrier(yr / period + phase_cycles, settings.waveform, duty)
+        x_signal = _carrier(xr / period + phase_field, settings.waveform, duty)
+        y_signal = _carrier(yr / period + phase_field, settings.waveform, duty)
         signal = 0.5 * (x_signal + y_signal)
     elif family == "nested_square":
         assert xr is not None and yr is not None
         metric = np.maximum(np.abs(xr), np.abs(yr))
-        signal = _line_carrier(metric / period + phase_cycles, duty)
+        signal = _line_carrier(metric / period + phase_field, duty)
     elif family == "squircle":
         assert xr is not None and yr is not None
         power = max(2.0, float(settings.squircle_power))
@@ -94,7 +112,7 @@ def render_pattern(width: int, height: int, settings: PatternSettings) -> np.nda
         scale = np.maximum(ax, ay)
         safe = np.where(scale > 0, scale, 1.0)
         metric = scale * ((ax / safe) ** power + (ay / safe) ** power) ** (1.0 / power)
-        signal = _line_carrier(metric / period + phase_cycles, duty)
+        signal = _line_carrier(metric / period + phase_field, duty)
     elif family in {"spiral", "counter_spiral"}:
         radius = np.hypot(x, y)
         theta = np.arctan2(y, x)
@@ -103,18 +121,18 @@ def render_pattern(width: int, height: int, settings: PatternSettings) -> np.nda
             float(settings.spiral_width_percent) / 100.0, 0.02, 0.9
         )
         spiral_cycles = radius / period - arms * (theta - angle) / (2.0 * np.pi)
-        signal = _line_carrier(spiral_cycles + phase_cycles, width_fraction)
+        signal = _line_carrier(spiral_cycles + phase_field, width_fraction)
         if family == "counter_spiral":
             opposite = radius / period + arms * (theta + angle) / (2.0 * np.pi)
             signal = np.maximum(
                 signal,
-                _line_carrier(opposite + phase_cycles, width_fraction),
+                _line_carrier(opposite + phase_field, width_fraction),
             )
     elif family == "starburst":
         theta = np.arctan2(y, x)
         spokes = max(2, int(settings.spokes))
         sectors = spokes * 2
-        angular = np.mod(theta - angle + phase_cycles * (2.0 * np.pi / sectors), 2.0 * np.pi)
+        angular = np.mod(theta - angle + phase_field * (2.0 * np.pi / sectors), 2.0 * np.pi)
         sector = np.floor(angular / (2.0 * np.pi / sectors)).astype(np.int32)
         signal = (sector % 2 == 0).astype(np.float32)
     elif family == "speckle":
@@ -128,7 +146,7 @@ def render_pattern(width: int, height: int, settings: PatternSettings) -> np.nda
         signal = np.ones((height, width), np.float32)
     else:
         assert xr is not None
-        cycles = xr / period + phase_cycles
+        cycles = xr / period + phase_field
         signal = _carrier(cycles, settings.waveform, duty)
 
     if settings.invert:
@@ -164,6 +182,7 @@ class PatternOutputWindow(QtWidgets.QLabel):
         self._settings = PatternSettings()
         self._effective_angle = self._settings.angle_deg
         self._effective_phase = self._settings.phase_deg
+        self._breathing_phase = 0.0
         self._elapsed = QtCore.QElapsedTimer()
         self._timer = QtCore.QTimer(self)
         self._timer.setTimerType(QtCore.Qt.TimerType.PreciseTimer)
@@ -172,8 +191,13 @@ class PatternOutputWindow(QtWidgets.QLabel):
 
     @property
     def effective_settings(self) -> PatternSettings:
+        period = float(self._settings.period_px)
+        if self._settings.mode == "continuous" and self._settings.breathing_depth_percent:
+            depth = float(self._settings.breathing_depth_percent) / 100.0
+            period *= max(0.05, 1.0 + depth * math.sin(self._breathing_phase))
         return replace(
             self._settings,
+            period_px=period,
             angle_deg=self._effective_angle,
             phase_deg=self._effective_phase,
         )
@@ -190,6 +214,7 @@ class PatternOutputWindow(QtWidgets.QLabel):
         if reset_phase:
             self._effective_angle = settings.angle_deg
             self._effective_phase = settings.phase_deg
+            self._breathing_phase = 0.0
         if settings.mode == "continuous" and self.isVisible():
             self._elapsed.restart()
             self._timer.start()
@@ -222,7 +247,7 @@ class PatternOutputWindow(QtWidgets.QLabel):
 
     def step(self) -> None:
         delta = float(self._settings.step_deg)
-        if self._settings.family == "rings":
+        if self._settings.step_target == "phase" or self._settings.family == "rings":
             self._effective_phase = (self._effective_phase + delta) % 360.0
         else:
             self._effective_angle = (self._effective_angle + delta) % 180.0
@@ -245,11 +270,17 @@ class PatternOutputWindow(QtWidgets.QLabel):
             self._elapsed.start()
             return
         seconds = self._elapsed.restart() / 1000.0
-        delta = float(self._settings.speed_deg_s) * seconds
-        if self._settings.family == "rings":
-            self._effective_phase = (self._effective_phase + delta) % 360.0
+        rotation_delta = float(self._settings.speed_deg_s) * seconds
+        phase_delta = float(self._settings.phase_speed_cycles_s) * 360.0 * seconds
+        if self._settings.family == "rings" and phase_delta == 0.0:
+            self._effective_phase = (self._effective_phase + rotation_delta) % 360.0
         else:
-            self._effective_angle = (self._effective_angle + delta) % 180.0
+            self._effective_angle = (self._effective_angle + rotation_delta) % 180.0
+            self._effective_phase = (self._effective_phase + phase_delta) % 360.0
+        self._breathing_phase = (
+            self._breathing_phase
+            + 2.0 * np.pi * float(self._settings.breathing_hz) * seconds
+        ) % (2.0 * np.pi)
         self._redraw()
         self.stateChanged.emit(self.effective_settings)
 
@@ -338,7 +369,7 @@ class PatternControlPanel(QtWidgets.QGroupBox):
 
         self.period = QtWidgets.QDoubleSpinBox()
         self.period.setRange(4.0, 500.0)
-        self.period.setValue(24.0)
+        self.period.setValue(50.0)
         self.period.setSingleStep(2.0)
         self.period.setSuffix(" px")
         self.period.setToolTip(
@@ -366,6 +397,38 @@ class PatternControlPanel(QtWidgets.QGroupBox):
         self.phase.setSingleStep(10.0)
         self.phase.setSuffix(" deg")
         self.phase.setToolTip("Carrier phase / radial shift of the generated pattern.")
+
+        self.center_x = QtWidgets.QDoubleSpinBox()
+        self.center_x.setRange(-50.0, 50.0)
+        self.center_x.setValue(0.0)
+        self.center_x.setSingleStep(2.0)
+        self.center_x.setSuffix(" %")
+        self.center_x.setToolTip("Shift radial/spiral pattern centre horizontally.")
+
+        self.center_y = QtWidgets.QDoubleSpinBox()
+        self.center_y.setRange(-50.0, 50.0)
+        self.center_y.setValue(0.0)
+        self.center_y.setSingleStep(2.0)
+        self.center_y.setSuffix(" %")
+        self.center_y.setToolTip("Shift radial/spiral pattern centre vertically.")
+
+        self.phase_tilt_x = QtWidgets.QDoubleSpinBox()
+        self.phase_tilt_x.setRange(-720.0, 720.0)
+        self.phase_tilt_x.setValue(0.0)
+        self.phase_tilt_x.setSingleStep(15.0)
+        self.phase_tilt_x.setSuffix(" deg")
+        self.phase_tilt_x.setToolTip(
+            "Virtual X tilt: total carrier-phase change from left to right."
+        )
+
+        self.phase_tilt_y = QtWidgets.QDoubleSpinBox()
+        self.phase_tilt_y.setRange(-720.0, 720.0)
+        self.phase_tilt_y.setValue(0.0)
+        self.phase_tilt_y.setSingleStep(15.0)
+        self.phase_tilt_y.setSuffix(" deg")
+        self.phase_tilt_y.setToolTip(
+            "Virtual Y tilt: total carrier-phase change from top to bottom."
+        )
 
         self.duty = QtWidgets.QDoubleSpinBox()
         self.duty.setRange(5.0, 95.0)
@@ -439,7 +502,34 @@ class PatternControlPanel(QtWidgets.QGroupBox):
         self.speed.setValue(20.0)
         self.speed.setSingleStep(5.0)
         self.speed.setSuffix(" deg/s")
-        self.speed.setToolTip("Continuous pattern rotation/phase speed.")
+        self.speed.setToolTip(
+            "Continuous rotation speed. Set 0 to keep orientation fixed."
+        )
+
+        self.phase_speed = QtWidgets.QDoubleSpinBox()
+        self.phase_speed.setRange(-5.0, 5.0)
+        self.phase_speed.setValue(0.0)
+        self.phase_speed.setSingleStep(0.05)
+        self.phase_speed.setSuffix(" cycles/s")
+        self.phase_speed.setToolTip(
+            "Continuous carrier phase sweep. Can run together with rotation."
+        )
+
+        self.breathing_depth = QtWidgets.QDoubleSpinBox()
+        self.breathing_depth.setRange(0.0, 80.0)
+        self.breathing_depth.setValue(0.0)
+        self.breathing_depth.setSingleStep(2.0)
+        self.breathing_depth.setSuffix(" %")
+        self.breathing_depth.setToolTip(
+            "Period pulse/breathing depth. 0 disables it; 10-20% is a useful first experiment."
+        )
+
+        self.breathing_hz = QtWidgets.QDoubleSpinBox()
+        self.breathing_hz.setRange(0.01, 10.0)
+        self.breathing_hz.setValue(0.5)
+        self.breathing_hz.setSingleStep(0.1)
+        self.breathing_hz.setSuffix(" Hz")
+        self.breathing_hz.setToolTip("Frequency of period pulsing/breathing.")
 
         self.step_size = QtWidgets.QDoubleSpinBox()
         self.step_size.setRange(0.1, 180.0)
@@ -447,6 +537,10 @@ class PatternControlPanel(QtWidgets.QGroupBox):
         self.step_size.setSingleStep(5.0)
         self.step_size.setSuffix(" deg")
         self.step_size.setToolTip("Angle/phase increment for one reproducible step.")
+        self.step_target = QtWidgets.QComboBox()
+        self.step_target.addItem("Angle", "angle")
+        self.step_target.addItem("Phase", "phase")
+        self.step_target.setToolTip("Choose what the Next step button increments.")
 
         self.render_scale = QtWidgets.QComboBox()
         self.render_scale.addItem("100% (full display resolution)", 1.0)
@@ -491,6 +585,10 @@ class PatternControlPanel(QtWidgets.QGroupBox):
         form.addRow("Waveform", self.waveform)
         form.addRow("Angle", self.angle)
         form.addRow("Phase", self.phase)
+        form.addRow("Virtual phase tilt X", self.phase_tilt_x)
+        form.addRow("Virtual phase tilt Y", self.phase_tilt_y)
+        form.addRow("Pattern centre X", self.center_x)
+        form.addRow("Pattern centre Y", self.center_y)
         form.addRow("Duty / line width", self.duty)
         form.addRow("Squircle power", self.squircle_power)
         form.addRow("Spiral arms", self.spiral_arms)
@@ -501,7 +599,11 @@ class PatternControlPanel(QtWidgets.QGroupBox):
         form.addRow("Brightness", self.brightness)
         form.addRow(self.invert)
         form.addRow("Mode", self.mode)
-        form.addRow("Speed", self.speed)
+        form.addRow("Rotation speed", self.speed)
+        form.addRow("Phase sweep", self.phase_speed)
+        form.addRow("Period breathing", self.breathing_depth)
+        form.addRow("Breathing frequency", self.breathing_hz)
+        form.addRow("Step target", self.step_target)
         form.addRow("Step", self.step_size)
         form.addRow("Pattern render quality", self.render_scale)
         form.addRow("Animation redraw", self.animation_fps)
@@ -514,6 +616,10 @@ class PatternControlPanel(QtWidgets.QGroupBox):
             self.waveform,
             self.angle,
             self.phase,
+            self.phase_tilt_x,
+            self.phase_tilt_y,
+            self.center_x,
+            self.center_y,
             self.duty,
             self.squircle_power,
             self.spiral_arms,
@@ -525,6 +631,10 @@ class PatternControlPanel(QtWidgets.QGroupBox):
             self.invert,
             self.mode,
             self.speed,
+            self.phase_speed,
+            self.breathing_depth,
+            self.breathing_hz,
+            self.step_target,
             self.step_size,
             self.render_scale,
             self.animation_fps,
@@ -585,7 +695,15 @@ class PatternControlPanel(QtWidgets.QGroupBox):
             waveform=str(self.waveform.currentData()),
             mode=mode,
             speed_deg_s=self.speed.value(),
+            phase_speed_cycles_s=self.phase_speed.value(),
+            breathing_depth_percent=self.breathing_depth.value(),
+            breathing_hz=self.breathing_hz.value(),
             step_deg=self.step_size.value(),
+            step_target=str(self.step_target.currentData()),
+            center_x_percent=self.center_x.value(),
+            center_y_percent=self.center_y.value(),
+            phase_tilt_x_deg=self.phase_tilt_x.value(),
+            phase_tilt_y_deg=self.phase_tilt_y.value(),
             render_scale=float(self.render_scale.currentData()),
             animation_fps=self.animation_fps.value(),
         )
@@ -642,6 +760,12 @@ class PatternControlPanel(QtWidgets.QGroupBox):
                 "starburst",
             },
             self.phase: family not in {"speckle", "solid"},
+            self.phase_tilt_x: family not in {"speckle", "solid"},
+            self.phase_tilt_y: family not in {"speckle", "solid"},
+            self.center_x: family
+            in {"rings", "nested_square", "squircle", "spiral", "counter_spiral", "starburst"},
+            self.center_y: family
+            in {"rings", "nested_square", "squircle", "spiral", "counter_spiral", "starburst"},
             self.duty: family
             in {"stripes", "rings", "nested_square", "squircle"},
             self.squircle_power: family == "squircle",
@@ -652,7 +776,11 @@ class PatternControlPanel(QtWidgets.QGroupBox):
             self.seed: family == "speckle",
             self.mode: animatable,
             self.speed: continuous,
+            self.phase_speed: continuous,
+            self.breathing_depth: continuous,
+            self.breathing_hz: continuous and self.breathing_depth.value() > 0,
             self.animation_fps: continuous,
+            self.step_target: stepped and family != "rings",
             self.step_size: stepped,
         }
 

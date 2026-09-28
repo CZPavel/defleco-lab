@@ -19,6 +19,9 @@ def test_quick_screening_plan_is_bounded_and_identifiable() -> None:
     assert {"stripes", "checker", "spiral", "rings"} <= {
         case.settings.family for case in cases
     }
+    periods = {case.settings.period_px for case in cases}
+    assert 48.0 in periods and 64.0 in periods
+    assert min(periods) >= 48.0
 
 
 def test_extended_screening_reuses_additional_v02_pattern_families() -> None:

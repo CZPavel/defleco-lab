@@ -66,3 +66,26 @@ def test_radial_pattern_is_orientation_agnostic_in_portrait_geometry() -> None:
     # Rings depend only on radius from the image centre, so swapping width/height
     # must only transpose the image. This catches accidental landscape assumptions.
     assert np.array_equal(portrait.T, landscape)
+
+
+
+def test_spatial_phase_tilt_and_center_shift_change_pattern_geometry() -> None:
+    base = PatternSettings(family="stripes", period_px=50, waveform="sinusoidal")
+    tilted = PatternSettings(
+        family="stripes",
+        period_px=50,
+        waveform="sinusoidal",
+        phase_tilt_x_deg=180,
+        phase_tilt_y_deg=90,
+    )
+    assert not np.array_equal(
+        render_pattern(240, 180, base),
+        render_pattern(240, 180, tilted),
+    )
+
+    centered = PatternSettings(family="rings", period_px=50)
+    shifted = PatternSettings(family="rings", period_px=50, center_x_percent=15)
+    assert not np.array_equal(
+        render_pattern(240, 180, centered),
+        render_pattern(240, 180, shifted),
+    )

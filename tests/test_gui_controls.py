@@ -334,3 +334,44 @@ def test_linked_compare_viewers_preserve_fit_mode() -> None:
 
     left.close()
     right.close()
+
+
+
+def test_default_roi_is_visible_movable_and_resizable() -> None:
+    from defleco_lab.gui.image_viewer import ImageViewer, RoiItem
+
+    app = _app()
+    viewer = ImageViewer()
+    viewer.resize(640, 480)
+    viewer.show()
+    viewer.set_array(np.zeros((480, 640), np.uint8))
+    app.processEvents()
+
+    assert viewer.add_default_roi("analysis")
+    assert len(viewer.rois("analysis")) == 1
+    item = next(item for item in viewer.scene().items() if isinstance(item, RoiItem))
+    before = QtCore.QRectF(item.rect())
+    item.resize_from_handle("br", before.bottomRight() + QtCore.QPointF(40, 25))
+    after = item.rect()
+    assert after.width() > before.width()
+    assert after.height() > before.height()
+    assert len(item._handles) == 4
+    viewer.close()
+
+
+def test_record_start_is_blocked_when_source_is_frozen(monkeypatch) -> None:
+    from defleco_lab.gui.main_window import MainWindow
+
+    app = _app()
+    window = MainWindow()
+    window._stop()
+    monkeypatch.setattr(
+        QtWidgets.QFileDialog,
+        "getExistingDirectory",
+        lambda *args, **kwargs: "SHOULD_NOT_BE_USED",
+    )
+    window._record()
+    assert window.recorder is None
+    assert "not started" in window.recording_status.text().lower()
+    window.close()
+    app.processEvents()

@@ -43,6 +43,87 @@ The analysis path is deliberately split into four layers:
 The display layer must never be fed back into numerical processing. Colour maps and
 alpha overlays are for a human observer only.
 
+## Operator-feedback correction plan 2026-09-28
+
+This section tracks the second hands-on pass and is now the active priority order:
+fix broken or opaque operator workflows first, then extend analysis.
+
+### P0 — operator-blocking defects
+
+- [x] Recording now refuses to start when the selected source is not producing new
+      frames instead of silently creating an apparently inactive session.
+- [x] Recording has a dedicated visible REC state with elapsed time, written frame
+      count, queue depth, dropped-frame count and target path.
+- [x] Record/Stop controls reflect the actual recorder state; stopping with no active
+      recorder reports that explicitly.
+- [x] Session folders use microsecond timestamps to avoid collisions during quick
+      retry cycles; even a zero-frame session contains a valid metadata.csv.
+- [x] ROI buttons now create an immediately visible ROI instead of entering an
+      unexplained hidden draw mode.
+- [x] ROI rectangles are labelled, movable by dragging the body and resizable with
+      visible corner handles.
+- [x] A dedicated ROI toolbar exposes Add Analysis ROI, Add Motion ROI, Delete and
+      Clear; current counts are visible in the GUI.
+- [x] Auto motion compensation now fails early in the GUI when no Motion ROI is
+      defined and explains where/how to place one.
+- [~] Moving-vehicle compensation code path is present and ROI scale/order was
+      reviewed, but still requires a real dynamic-drive experiment.
+
+### P1 — pattern generator based on physical feedback
+
+- [x] Manual pattern default moved from 24 px to 50 px.
+- [x] Quick automatic screening now uses 48/64 px rather than 20/32 px; Extended
+      covers 32/48/64/80 px.
+- [x] Continuous dynamics can combine rotation and independent carrier phase sweep.
+- [x] Period pulse/breathing is restored as an independent continuous modulation.
+- [x] Pattern centre X/Y controls are restored for radial/spiral families.
+- [x] Virtual phase tilt X/Y adds a spatial carrier-phase gradient across the
+      display, providing software-only two-axis pattern warping.
+- [x] Stepped mode can explicitly step angle or phase.
+- [~] These dynamics need physical checking on the 2160x3840 portrait display,
+      especially continuous 4K render load.
+- [ ] Add deterministic pattern-state IDs / display-valid timing when a real
+      synchronization experiment needs it.
+
+### P2 — processing direction reset
+
+Physical feedback was that the added pixel-domain residual/line-suppression filters
+did not produce useful results. They remain available for comparison but are no
+longer part of Quick screening.
+
+- [x] Quick screening now keeps Scharr magnitude plus the already promising temporal
+      Frame Difference / Temporal Statistics baselines.
+- [~] Added **Fringe Line Geometry (vector)**: line-segment extraction creates
+      explicit vector markants; nearby same-orientation segments predict the normal
+      local line direction and angular residual is rasterized only for display.
+- [x] Vector method can show the extracted vector lines, segment orientation,
+      segment length or geometry residual, so the intermediate geometry is inspectable.
+- [ ] Validate vector extraction on saved real-car frames at ~50 px patterns and tune
+      minimum length / neighborhood radius from those data.
+- [ ] Next geometry extension: connect compatible segments into polylines and fit a
+      smooth local spline/polynomial model; score localized non-smooth displacement
+      and curvature rather than only segment-angle residual.
+- [ ] Add local inter-line spacing / phase-lattice residual for parallel stripe
+      families; for checkerboard keep two orientation families separate so normal
+      crossings are not classified as defects.
+- [ ] Only after geometry residuals work on real data, consider temporal fusion of
+      the geometry response over rotation/phase sweeps.
+
+### P3 — moving vehicle
+
+- [x] Motion ROI is now an explicit editable orange ROI using the same visible ROI
+      tools as Analysis ROI.
+- [x] The processing path keeps Motion ROI coordinates in original-image space and
+      applies processing scale only where appropriate.
+- [ ] Perform a first real moving-vehicle run with a static pattern and a Motion ROI
+      placed on stable vehicle texture.
+- [ ] Compare static-pattern motion compensation before combining vehicle motion with
+      continuously changing display patterns.
+- [ ] If changing reflected patterns contaminate phase-correlation motion estimation,
+      move the Motion ROI to a stable non-patterned feature or introduce a dedicated
+      motion-reference channel; do not hide the problem by threshold tuning.
+
+
 ## Reliability review 2026-09-27
 
 Static review of the integrated laboratory workflow focused on acquisition ordering,

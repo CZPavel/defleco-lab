@@ -82,17 +82,45 @@ Recommended first candidates:
 3. Single fine spiral
 4. Concentric rings
 
-Start around a period of **20-30 display pixels** and adjust based on the real
-reflection geometry.
+The current physical test showed useful structure starting around **50 display
+pixels**, so 50 px is now the manual default and Quick screening uses 48/64 px.
 
-Modes:
+Modes / dynamics:
 
 - **Static**: fixed pattern.
-- **Stepped**: each Next step changes the angle/phase by a known increment.
-  This is the preferred basis for reproducible automatic experiments.
-- **Continuous rotation**: useful for visual screening.
+- **Stepped**: Next step can increment angle or phase.
+- **Continuous**: rotation, carrier phase sweep and period breathing can be combined.
+- **Virtual phase tilt X/Y** changes phase progressively across the screen and acts
+  as a software-only two-axis warp.
+- Radial/spiral families also expose X/Y centre position.
 
 Esc closes the full-screen pattern output.
+
+## Recording raw sessions
+
+1. Start **Live** first. Record intentionally refuses to start when no new frames
+   are arriving.
+2. Press **Record** and choose a parent folder. Defleco creates its own timestamped
+   session subfolder.
+3. Confirm the visible red **REC** line: it shows elapsed time, frames actually
+   written, queue depth, drops and the path.
+4. Press **Stop record**. The status line reports the exact saved frame count/path.
+   A 0-frame session is explicitly reported as such.
+
+## Analysis ROI and Motion ROI
+
+ROI controls are available both in the Input panel and the **ROI tools** toolbar.
+
+- **Add Analysis ROI** immediately creates a cyan box in Original view. Drag the box
+  to move it and a white corner handle to resize it. Enable *Process enabled Analysis
+  ROIs only* when you want analysis restricted to those areas.
+- **Add Motion ROI** creates an orange box. Auto motion compensation uses these
+  regions to estimate vehicle translation.
+- For a moving vehicle, put Motion ROI on texture/features that move with the car
+  but are not dominated by the changing reflected display pattern. Start with a
+  static display pattern for the first moving-vehicle test.
+- Delete the selected ROI with the toolbar action or Delete key; Clear ROIs removes
+  all boxes.
 
 ## Camera
 
@@ -109,10 +137,10 @@ For each of fine stripes, checkerboard and single spiral:
 1. visually find a pattern fineness that makes the known defect visible;
 2. record a short raw session;
 3. compare Scharr magnitude;
-4. compare Scharr vector residual;
-5. compare Structure Tensor orientation residual;
-6. compare the two line-suppressed tensor outputs;
-7. for a pattern sequence compare Frame Difference and Temporal Statistics.
+4. compare **Fringe Line Geometry (vector)** first with Vector lines, then Geometry residual;
+5. for a pattern sequence compare Frame Difference and Temporal Statistics;
+6. treat the older tensor/vector-residual/directional outputs as optional experimental
+   references rather than recommended defaults until real data proves otherwise.
 
 Do not interpret a more colourful image as automatically being a better detector.
 The useful result is the one where the known defect becomes more localised or
