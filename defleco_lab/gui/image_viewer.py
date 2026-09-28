@@ -7,7 +7,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 class _RoiHandle(QtWidgets.QGraphicsRectItem):
     SIZE = 10.0
 
-    def __init__(self, corner: str, parent: "RoiItem") -> None:
+    def __init__(self, corner: str, parent: RoiItem) -> None:
         half = self.SIZE / 2.0
         super().__init__(-half, -half, self.SIZE, self.SIZE, parent)
         self.corner = corner

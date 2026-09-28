@@ -1,9 +1,9 @@
 from .filters import (
     DifferenceOfGaussians,
     DirectionalResidual,
+    FringeLineGeometry,
     GaborBank,
     Gradient,
-    FringeLineGeometry,
     Laplacian,
     LocalBackgroundResidual,
     StructureTensor,
@@ -12,9 +12,9 @@ from .filters import (
 __all__ = [
     "DifferenceOfGaussians",
     "DirectionalResidual",
+    "FringeLineGeometry",
     "GaborBank",
     "Gradient",
-    "FringeLineGeometry",
     "Laplacian",
     "LocalBackgroundResidual",
     "StructureTensor",

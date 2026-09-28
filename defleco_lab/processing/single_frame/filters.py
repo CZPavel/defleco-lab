@@ -751,7 +751,7 @@ class FringeLineGeometry(ProcessingMethod):
         }
         primary = outputs[str(self.parameters["output"])]
         diagnostics = {
-            "line_count": int(len(segments)),
+            "line_count": len(segments),
             "median_line_length_px": float(np.median(lengths)),
             "median_neighbors": float(np.median(neighbor_count)),
         }
