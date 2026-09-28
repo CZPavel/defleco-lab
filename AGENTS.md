@@ -15,8 +15,8 @@ Before implementing anything:
 2. identify existing code, prior decisions, referenced repositories, scripts, data,
    tests, or documentation that already solve part of it;
 3. reuse those parts instead of recreating them;
-4. implement only the missing delta;
-5. validate only the behavior affected by that delta.
+4. implement the missing delta while preserving already-solved behavior;
+5. validate at a depth proportional to the uncertainty, consequence, and decision value of the change.
 
 If the task explicitly points to an existing implementation, treat it as the
 default source of truth for that functionality unless there is a demonstrated
@@ -51,8 +51,11 @@ A commit SHA, green CI, successful import, GUI startup, or device discovery prov
 only that specific fact. Do not present those as proof that the application's
 primary function works.
 
-For each change, choose the smallest test that answers the real question. Prefer
-one meaningful behavioral test over many broad low-value checks.
+For each change, choose the test or analysis with the highest decision value.
+Small targeted tests are preferred when they answer the question, but broader or
+longer validation is appropriate when the unresolved uncertainty, failure mode, or
+consequence requires it. Do not optimize for minimum test count at the expense of
+confidence in the requested behavior.
 
 Do not, unless explicitly requested:
 - rerun unchanged hardware validation;
@@ -64,6 +67,36 @@ Do not, unless explicitly requested:
   change.
 
 When a failure is found, test the shortest path from cause to user-visible effect.
+
+
+## GitHub and CI workflow hygiene
+
+Treat remote pushes and CI runs as externally visible project events, not as a
+scratchpad. This repository runs CI on pushes and pull requests, and failed runs
+can generate user notifications.
+
+For multi-step implementation, debugging, or review work:
+- group related edits into a coherent change set before pushing to `main`;
+- prefer a temporary branch / pull request when several dependent edits or
+  corrective iterations are expected;
+- local or branch commits may be frequent, but avoid chains of small remote pushes
+  to `main` that repeatedly trigger redundant CI;
+- do not knowingly push an intermediate lint/test failure to `main`;
+- when CI fails, inspect the exact failed step and its log before making another
+  corrective change;
+- distinguish lint/static-analysis failures from compile, unit-test, runtime,
+  hardware, and acceptance-test failures when diagnosing or reporting them;
+- do not interpret a failed workflow headline as evidence that every test failed;
+  identify which step actually failed and which later steps were skipped;
+- after a sequence of changes, verify that the latest relevant `main` CI run is
+  green before treating the repository state as settled.
+
+Do not rerun CI merely to obtain a green badge when the failure has a deterministic
+code cause. Fix the cause first, then use one relevant run as confirmation.
+
+When several files must change together but the available GitHub tooling writes
+them as separate commits, use a working branch where practical and merge the
+coherent result instead of exposing each intermediate state on `main`.
 
 ## Definition of done
 
