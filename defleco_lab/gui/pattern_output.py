@@ -6,7 +6,9 @@ import math
 from dataclasses import asdict, dataclass, replace
 
 import numpy as np
-from PySide6 import QtCore, QtGui, QtWidgets
+from PySide6 import QtCore, QtGui, QtOpenGL, QtWidgets
+
+from .pattern_shader import PatternShader
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,8 +31,8 @@ class PatternSettings:
     center_y_percent: float = 0.0
     phase_tilt_x_deg: float = 0.0
     phase_tilt_y_deg: float = 0.0
-    render_scale: float = 0.5
-    animation_fps: int = 20
+    render_scale: float = 1.0
+    animation_fps: int = 60
     duty_percent: float = 50.0
     squircle_power: float = 6.0
     spiral_arms: int = 1
@@ -54,7 +56,8 @@ def render_pattern(width: int, height: int, settings: PatternSettings) -> np.nda
     height = max(2, int(height))
     period = max(2.0, float(settings.period_px))
     duty = np.clip(float(settings.duty_percent) / 100.0, 0.01, 0.99)
-    phase_cycles = (float(settings.phase_deg) % 360.0) / 360.0
+    phase_period = 720.0 if settings.family == "starburst" else 360.0
+    phase_cycles = (float(settings.phase_deg) % phase_period) / 360.0
 
     center_x = (width - 1) / 2.0 + width * float(settings.center_x_percent) / 100.0
     center_y = (height - 1) / 2.0 + height * float(settings.center_y_percent) / 100.0
@@ -168,29 +171,47 @@ def _line_carrier(cycles: np.ndarray, width_fraction: float) -> np.ndarray:
 
 
 
-class PatternOutputWindow(QtWidgets.QLabel):
-    """Borderless full-screen pattern surface intended for the external display."""
+class PatternOutputWindow(QtOpenGL.QOpenGLWindow):
+    """Native GPU surface; schedule animation only after the previous buffer swap."""
 
     stateChanged = QtCore.Signal(object)
+    renderFailed = QtCore.Signal(str)
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("Defleco LAB - Pattern Output")
-        self.setWindowFlag(QtCore.Qt.WindowType.FramelessWindowHint, True)
-        self.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        self.setStyleSheet("background: black;")
+        fmt = QtGui.QSurfaceFormat()
+        fmt.setVersion(3, 3)
+        fmt.setProfile(QtGui.QSurfaceFormat.OpenGLContextProfile.CoreProfile)
+        fmt.setSwapBehavior(QtGui.QSurfaceFormat.SwapBehavior.DoubleBuffer)
+        fmt.setSwapInterval(1)
+        fmt.setDepthBufferSize(0)
+        fmt.setStencilBufferSize(0)
+        self.setFormat(fmt)
+        self.setTitle("Defleco LAB - Pattern Output")
+        self.setFlag(QtCore.Qt.WindowType.FramelessWindowHint, True)
         self._settings = PatternSettings()
         self._effective_angle = self._settings.angle_deg
         self._effective_phase = self._settings.phase_deg
         self._breathing_phase = 0.0
         self._elapsed = QtCore.QElapsedTimer()
-        self._timer = QtCore.QTimer(self)
-        self._timer.setTimerType(QtCore.Qt.TimerType.PreciseTimer)
-        self._timer.setInterval(50)
-        self._timer.timeout.connect(self._animate)
+        self._shader = PatternShader()
+        self._render_error = ""
+        self._settings_revision = 0
+        self._painted_revision = -1
+        self._presented_revision = -1
+        self.frameSwapped.connect(self._frame_swapped)
+
+    @property
+    def has_presented_frame(self) -> bool:
+        return (
+            self.isExposed() and not self._render_error
+            and self._presented_revision == self._settings_revision
+        )
 
     @property
     def effective_settings(self) -> PatternSettings:
+        # This is the last submitted frame, not a fresh clock sample: experiments
+        # must not record settings for an image that has never been drawn.
         period = float(self._settings.period_px)
         if self._settings.mode == "continuous" and self._settings.breathing_depth_percent:
             depth = float(self._settings.breathing_depth_percent) / 100.0
@@ -202,7 +223,30 @@ class PatternOutputWindow(QtWidgets.QLabel):
             phase_deg=self._effective_phase,
         )
 
+    def _advance(self, seconds: float) -> None:
+        """Advance by monotonic elapsed time; never integrate nominal FPS."""
+        rotation = float(self._settings.speed_deg_s) * seconds
+        phase = float(self._settings.phase_speed_cycles_s) * 360.0 * seconds
+        phase_period = 720.0 if self._settings.family == "starburst" else 360.0
+        if self._settings.family == "rings" and phase == 0.0:
+            self._effective_phase = (self._effective_phase + rotation) % 360.0
+        else:
+            # A one-arm spiral is 360-degree periodic, not 180-degree periodic.
+            self._effective_angle = (self._effective_angle + rotation) % 360.0
+            self._effective_phase = (self._effective_phase + phase) % phase_period
+        self._breathing_phase = (
+            self._breathing_phase + 2.0 * math.pi * self._settings.breathing_hz * seconds
+        ) % (2.0 * math.pi)
+
+    def _sample_animation(self) -> None:
+        if self._settings.mode == "continuous" and self._elapsed.isValid():
+            seconds = self._elapsed.nsecsElapsed() / 1_000_000_000.0
+            self._elapsed.start()
+            self._advance(seconds)
+
     def set_settings(self, settings: PatternSettings) -> None:
+        self._settings_revision += 1
+        self._sample_animation()
         reset_phase = (
             settings.family != self._settings.family
             or settings.mode != self._settings.mode
@@ -210,53 +254,53 @@ class PatternOutputWindow(QtWidgets.QLabel):
             or settings.phase_deg != self._settings.phase_deg
         )
         self._settings = settings
-        self._timer.setInterval(max(16, round(1000 / max(1, int(settings.animation_fps)))))
         if reset_phase:
             self._effective_angle = settings.angle_deg
             self._effective_phase = settings.phase_deg
             self._breathing_phase = 0.0
-        if settings.mode == "continuous" and self.isVisible():
-            self._elapsed.restart()
-            self._timer.start()
-        else:
-            self._timer.stop()
+        self._elapsed.invalidate()
+        if settings.mode == "continuous" and self.isExposed():
+            self._elapsed.start()
         self._redraw()
         self.stateChanged.emit(self.effective_settings)
 
     def show_on_screen(self, screen_index: int) -> None:
         screens = QtGui.QGuiApplication.screens()
-        if not screens:
-            self.showFullScreen()
-        else:
-            index = max(0, min(int(screen_index), len(screens) - 1))
-            screen = screens[index]
+        if screens:
+            screen = screens[max(0, min(int(screen_index), len(screens) - 1))]
+            self.setScreen(screen)
             self.setGeometry(screen.geometry())
-            self.show()
-            if self.windowHandle() is not None:
-                self.windowHandle().setScreen(screen)
-            self.setGeometry(screen.geometry())
-            self.showFullScreen()
-        if self._settings.mode == "continuous":
-            self._elapsed.restart()
-            self._timer.start()
+        self.showFullScreen()
+        QtCore.QTimer.singleShot(1500, self._check_context)
         self._redraw()
 
+    def _check_context(self) -> None:
+        if self.isVisible() and not self.isValid() and not self._render_error:
+            self._render_error = "OpenGL 3.3 output could not be initialized."
+            self.renderFailed.emit(self._render_error)
+
     def hide_output(self) -> None:
-        self._timer.stop()
+        self._sample_animation()
+        self._elapsed.invalidate()
+        self._presented_revision = -1
         self.hide()
 
     def step(self) -> None:
+        self._settings_revision += 1
         delta = float(self._settings.step_deg)
         if self._settings.step_target == "phase" or self._settings.family == "rings":
-            self._effective_phase = (self._effective_phase + delta) % 360.0
+            period = 720.0 if self._settings.family == "starburst" else 360.0
+            self._effective_phase = (self._effective_phase + delta) % period
         else:
-            self._effective_angle = (self._effective_angle + delta) % 180.0
+            self._effective_angle = (self._effective_angle + delta) % 360.0
         self._redraw()
         self.stateChanged.emit(self.effective_settings)
 
-    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
-        super().resizeEvent(event)
-        self._redraw()
+    def exposeEvent(self, event: QtGui.QExposeEvent) -> None:
+        self._elapsed.invalidate()
+        if self.isExposed() and self._settings.mode == "continuous":
+            self._elapsed.start()
+        super().exposeEvent(event)
 
     def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
         if event.key() == QtCore.Qt.Key.Key_Escape:
@@ -265,67 +309,53 @@ class PatternOutputWindow(QtWidgets.QLabel):
             return
         super().keyPressEvent(event)
 
-    def _animate(self) -> None:
-        if not self._elapsed.isValid():
-            self._elapsed.start()
+    def initializeGL(self) -> None:
+        try:
+            self._shader.initialize(self.context())
+            self._render_error = ""
+            self.context().aboutToBeDestroyed.connect(self._release_gl)
+        except RuntimeError as exc:
+            self._render_error = str(exc)
+            self.renderFailed.emit(self._render_error)
+
+    def _release_gl(self) -> None:
+        self.makeCurrent()
+        self._shader.close()
+        self.doneCurrent()
+
+    def paintGL(self) -> None:
+        if self._render_error:
+            functions = self.context().functions()
+            functions.glClearColor(0.0, 0.0, 0.0, 1.0)
+            functions.glClear(0x00004000)
             return
-        seconds = self._elapsed.restart() / 1000.0
-        rotation_delta = float(self._settings.speed_deg_s) * seconds
-        phase_delta = float(self._settings.phase_speed_cycles_s) * 360.0 * seconds
-        if self._settings.family == "rings" and phase_delta == 0.0:
-            self._effective_phase = (self._effective_phase + rotation_delta) % 360.0
-        else:
-            self._effective_angle = (self._effective_angle + rotation_delta) % 180.0
-            self._effective_phase = (self._effective_phase + phase_delta) % 360.0
-        self._breathing_phase = (
-            self._breathing_phase
-            + 2.0 * np.pi * float(self._settings.breathing_hz) * seconds
-        ) % (2.0 * np.pi)
-        self._redraw()
+        if self._settings.mode == "continuous":
+            if not self._elapsed.isValid():
+                self._elapsed.start()
+            self._sample_animation()
+        # QWindow is in logical pixels; gl_FragCoord and the period are physical
+        # display pixels. No intermediate low-resolution image or CPU scaling.
+        dpr = self.devicePixelRatio()
+        width, height = round(self.width() * dpr), round(self.height() * dpr)
+        try:
+            self._shader.draw(self.effective_settings, width, height)
+        except RuntimeError as exc:
+            self._render_error = str(exc)
+            self.renderFailed.emit(self._render_error)
+            return
+        self._painted_revision = self._settings_revision
         self.stateChanged.emit(self.effective_settings)
 
-    def _redraw(self) -> None:
-        if self.width() < 2 or self.height() < 2:
-            return
-        effective = self.effective_settings
-        render_scale = min(1.0, max(0.1, float(effective.render_scale)))
-        render_width = max(2, round(self.width() * render_scale))
-        render_height = max(2, round(self.height() * render_scale))
+    def _frame_swapped(self) -> None:
+        if self.isExposed() and not self._render_error:
+            self._presented_revision = self._painted_revision
+        if self.isExposed() and self._settings.mode == "continuous" and not self._render_error:
+            self.update()
 
-        # QWidget geometry is expressed in Qt device-independent pixels. On a
-        # Windows display using e.g. 150% scaling, 2160x3840 physical pixels are
-        # typically exposed as 1440x2560 logical pixels. Keep period/speckle
-        # controls defined in physical display pixels so experiments remain
-        # reproducible regardless of desktop scaling or portrait orientation.
-        dpr = max(0.1, float(self.devicePixelRatioF()))
-        rendered_settings = replace(
-            effective,
-            period_px=max(2.0, effective.period_px * render_scale / dpr),
-            speckle_size_px=max(
-                1, round(effective.speckle_size_px * render_scale / dpr)
-            ),
-        )
-        data = render_pattern(render_width, render_height, rendered_settings)
-        image = QtGui.QImage(
-            data.data,
-            data.shape[1],
-            data.shape[0],
-            data.strides[0],
-            QtGui.QImage.Format.Format_Grayscale8,
-        ).copy()
-        pixmap = QtGui.QPixmap.fromImage(image)
-        if render_width != self.width() or render_height != self.height():
-            transform = (
-                QtCore.Qt.TransformationMode.SmoothTransformation
-                if effective.waveform == "sinusoidal"
-                else QtCore.Qt.TransformationMode.FastTransformation
-            )
-            pixmap = pixmap.scaled(
-                self.size(),
-                QtCore.Qt.AspectRatioMode.IgnoreAspectRatio,
-                transform,
-            )
-        self.setPixmap(pixmap)
+    def _redraw(self) -> None:
+        # Parameter edits while hidden must not build full-resolution images.
+        if self.isExposed():
+            self.update()
 
 
 class PatternControlPanel(QtWidgets.QGroupBox):
@@ -385,7 +415,7 @@ class PatternControlPanel(QtWidgets.QGroupBox):
         )
 
         self.angle = QtWidgets.QDoubleSpinBox()
-        self.angle.setRange(0.0, 179.9)
+        self.angle.setRange(0.0, 359.9)
         self.angle.setValue(0.0)
         self.angle.setSingleStep(5.0)
         self.angle.setSuffix(" deg")
@@ -492,7 +522,7 @@ class PatternControlPanel(QtWidgets.QGroupBox):
         self.mode = QtWidgets.QComboBox()
         self.mode.addItem("Static", "static")
         self.mode.addItem("Stepped", "step")
-        self.mode.addItem("Continuous rotation", "continuous")
+        self.mode.addItem("Continuous animation", "continuous")
         self.mode.setToolTip(
             "Stepped mode is preferred for reproducible capture; continuous mode is useful for visual screening."
         )
@@ -542,25 +572,6 @@ class PatternControlPanel(QtWidgets.QGroupBox):
         self.step_target.addItem("Phase", "phase")
         self.step_target.setToolTip("Choose what the Next step button increments.")
 
-        self.render_scale = QtWidgets.QComboBox()
-        self.render_scale.addItem("100% (full display resolution)", 1.0)
-        self.render_scale.addItem("50% (recommended)", 0.5)
-        self.render_scale.addItem("25% (fast preview)", 0.25)
-        self.render_scale.setCurrentIndex(1)
-        self.render_scale.setToolTip(
-            "Internal pattern rendering resolution. Period remains defined in display pixels; "
-            "50% greatly reduces continuous-animation load on a 4K display."
-        )
-
-        self.animation_fps = QtWidgets.QSpinBox()
-        self.animation_fps.setRange(5, 60)
-        self.animation_fps.setValue(20)
-        self.animation_fps.setSuffix(" FPS")
-        self.animation_fps.setToolTip(
-            "Requested software redraw rate for continuous pattern motion. This is not "
-            "camera/display hardware synchronization."
-        )
-
         self.screen = QtWidgets.QComboBox()
         self.screen.setSizeAdjustPolicy(
             QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
@@ -605,8 +616,12 @@ class PatternControlPanel(QtWidgets.QGroupBox):
         form.addRow("Breathing frequency", self.breathing_hz)
         form.addRow("Step target", self.step_target)
         form.addRow("Step", self.step_size)
-        form.addRow("Pattern render quality", self.render_scale)
-        form.addRow("Animation redraw", self.animation_fps)
+        self.render_status = QtWidgets.QLabel(
+            "Native display resolution; animation follows display refresh."
+        )
+        self.render_status.setWordWrap(True)
+        form.addRow(self.render_status)
+        self.output.renderFailed.connect(self._render_failed)
         form.addRow("Output display", self.screen)
         form.addRow(buttons)
 
@@ -636,8 +651,6 @@ class PatternControlPanel(QtWidgets.QGroupBox):
             self.breathing_hz,
             self.step_target,
             self.step_size,
-            self.render_scale,
-            self.animation_fps,
         ):
             _connect(widget, self._settings_changed)
         self.show_button.clicked.connect(self.show_output)
@@ -645,6 +658,10 @@ class PatternControlPanel(QtWidgets.QGroupBox):
         self.step_button.clicked.connect(self.output.step)
         self._update_context()
         self._settings_changed()
+
+    def _render_failed(self, message: str) -> None:
+        self.render_status.setText("Pattern output unavailable: " + message)
+        self.output.hide_output()
 
     def refresh_screens(self) -> None:
         current = self.screen.currentData() if hasattr(self, "screen") else None
@@ -704,8 +721,6 @@ class PatternControlPanel(QtWidgets.QGroupBox):
             center_y_percent=self.center_y.value(),
             phase_tilt_x_deg=self.phase_tilt_x.value(),
             phase_tilt_y_deg=self.phase_tilt_y.value(),
-            render_scale=float(self.render_scale.currentData()),
-            animation_fps=self.animation_fps.value(),
         )
 
     def current_effective_settings(self) -> PatternSettings:
@@ -779,7 +794,6 @@ class PatternControlPanel(QtWidgets.QGroupBox):
             self.phase_speed: continuous,
             self.breathing_depth: continuous,
             self.breathing_hz: continuous and self.breathing_depth.value() > 0,
-            self.animation_fps: continuous,
             self.step_target: stepped and family != "rings",
             self.step_size: stepped,
         }

@@ -96,6 +96,20 @@ Modes / dynamics:
 
 Esc closes the full-screen pattern output.
 
+Pattern output uses native physical display pixels and follows the display's
+refresh cadence. The previous render-quality and software-FPS controls have been
+removed: lowering resolution is no longer needed for continuous output. Binary
+edges use subpixel coverage to reduce visible stepping during slow movement.
+Period remains specified in physical display pixels, including Windows scaling.
+For phase-only motion, set rotation speed to zero and use **Phase sweep**.
+Rotation wraps at 360 degrees; starburst phase has a 720-degree cycle because
+360 degrees shifts it by one bright/dark sector.
+
+Automated capture starts the settle interval after the requested pattern has
+completed a buffer swap. If the output fails or disappears, capture stops with an
+error rather than recording a case under an unpresented pattern. A buffer swap
+does not establish camera/display hardware synchronization or optical settling.
+
 ## Recording raw sessions
 
 1. Start **Live** first. Record intentionally refuses to start when no new frames

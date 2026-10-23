@@ -17,11 +17,17 @@ Defleco LAB is an independent, experimental Windows desktop laboratory for compa
 - Deterministic synthetic fringes, grid, checkerboard, speckle, translation, and localized deformation.
 - Raw-frame record/replay so the same sequence can be evaluated repeatedly with different algorithms.
 - Dark PySide6 engineering UI with typed parameters, display-only range/heatmap/alpha controls, shared compare ranges, zoom, pan, presets, Analysis ROIs, and Motion ROIs.
-- CPU baseline; OpenCV CUDA is not required.
+- CPU image analysis; native-resolution GPU pattern output using OpenGL 3.3. OpenCV CUDA is not required.
 
 ## Install on Windows
 
 Requirements: Windows 10/11 x64, Python 3.11 x64. Hardware use additionally requires a compatible pylon Runtime and `pypylon 26.6`.
+
+Full-screen pattern output requires an OpenGL 3.3 graphics driver. It renders
+procedurally on the GPU and requests double-buffered VSync; continuous animation
+follows completed buffer swaps instead of a software FPS timer. Offline Mono8
+pattern generation remains available without an OpenGL context. No new Python
+dependency is required.
 
 ```powershell
 git clone https://github.com/CZPavel/defleco-lab.git
@@ -95,6 +101,20 @@ The `Original` tab is intentionally a camera/recording baseline and does not run
 ```
 
 Normal CI needs no camera and remains hardware-independent.
+
+GPU pattern validation is an explicit local check requiring an OpenGL 3.3 driver:
+
+```powershell
+# Off-screen GPU/CPU pixel comparisons, edge regressions and a 2160x3840 benchmark:
+.\.venv\Scripts\python.exe tools\pattern_render_acceptance.py
+# Also show a bounded animation on the second connected display (zero-based index):
+.\.venv\Scripts\python.exe tools\pattern_render_acceptance.py --screen 1
+```
+
+The optional on-screen check reports buffer-swap intervals and verifies that
+hidden output stops animating. It opens no camera and changes no device settings.
+These software checks do not establish zero physical tearing or camera/display
+hardware synchronization.
 
 ### Bounded hardware smoke test
 

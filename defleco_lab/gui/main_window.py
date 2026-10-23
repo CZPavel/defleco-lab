@@ -90,6 +90,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._experiment_root: Path | None = None
         self._experiment_baseline_frame_id: int | None = None
         self._experiment_case_started = 0.0
+        self._experiment_case_requested = 0.0
         self._experiment_settle_ms = 250
         self._experiment_auto_process = True
         self._experiment_profile = "quick"
@@ -348,6 +349,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.pattern_dock = QtWidgets.QDockWidget("Pattern generator", self)
         self.pattern_dock.setObjectName("pattern_generator_dock")
         self.pattern_output = PatternControlPanel()
+        self.pattern_output.output.renderFailed.connect(self._pattern_output_failed)
         self.pattern_dock.setWidget(_scrollable_dock_content(self.pattern_output))
         self.addDockWidget(QtCore.Qt.DockWidgetArea.LeftDockWidgetArea, self.pattern_dock)
 
@@ -798,28 +800,52 @@ class MainWindow(QtWidgets.QMainWindow):
             return
 
         case = self._experiment_cases[self._experiment_index]
+        self._experiment_baseline_frame_id = None
+        self._experiment_case_started = 0.0
+        self._experiment_case_requested = perf_counter()
+        self.experiment_timer.start()
         self.pattern_output.output.set_settings(case.settings)
         if not self.pattern_output.output.isVisible():
             screen = self.pattern_output.screen.currentData()
             self.pattern_output.output.show_on_screen(0 if screen is None else int(screen))
 
+        if not self.experiment_timer.isActive():
+            return  # A synchronous render failure already aborted this capture.
+
         # Do not choose the capture baseline until the requested display-settle
         # interval has elapsed. Then require one strictly newer camera frame.
         # This prevents a pre-settle frame that arrived during the delay from being
         # accepted as the case image.
-        self._experiment_baseline_frame_id = None
-        self._experiment_case_started = perf_counter()
         self.experiment.update_progress(
             self._experiment_index,
             len(self._experiment_cases),
             f"Settling pattern {self._experiment_index + 1}/{len(self._experiment_cases)}: "
             f"{case.case_id}",
         )
-        self.experiment_timer.start()
+
+    @QtCore.Slot(str)
+    def _pattern_output_failed(self, message: str) -> None:
+        if self.experiment_timer.isActive():
+            self.experiment_timer.stop()
+            self.pattern_output.output.hide_output()
+            self.experiment.failed("Pattern output: " + message)
+            self._write_capture_manifest(status="error")
 
     def _experiment_poll(self) -> None:
         if self._experiment_root is None or self._experiment_index < 0:
             self.experiment_timer.stop()
+            return
+        output = self.pattern_output.output
+        if not output.has_presented_frame:
+            if self._experiment_case_started or (
+                perf_counter() - self._experiment_case_requested > 5.0
+            ):
+                self._pattern_output_failed("Requested pattern was not presented on the display.")
+            return
+        if not self._experiment_case_started:
+            # The static case has completed a buffer swap. Only now start the
+            # display-settle interval; request time is not presentation time.
+            self._experiment_case_started = perf_counter()
             return
         if not self.history:
             return

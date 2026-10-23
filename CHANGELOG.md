@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Replaced GUI-thread NumPy/pixmap pattern animation with native-resolution OpenGL 3.3 procedural rendering, double-buffered VSync requests, and swap-driven timing.
+- Added subpixel binary-edge coverage without angular seams; fixed spiral rotation jumps at 180 degrees and starburst phase jumps at 360 degrees.
+- Removed live output downscale/software-FPS controls; retained deterministic CPU Mono8 generation and seeded speckle for offline workflows.
+- Gated capture settling on a presented pattern and abort capture if display output fails or disappears.
+- Added animation regressions and explicit GPU/framebuffer/presentation acceptance (`python tools/pattern_render_acceptance.py --screen 1`, zero-based screen index).
+
 - Integrated the standalone V02 pattern concepts into Defleco LAB with external-display output, static/stepped/continuous modes, contextual controls, and stripes/checker/rings/composite/nested-square/squircle/spiral/counter-spiral/starburst/speckle/solid families.
 - Reorganized the operator workflow into explicit Pre-processing -> Analysis method -> Response post-processing -> Display stages with contextual parameter visibility and explanatory tooltips.
 - Removed routine exposure/gain/ROI/FPS editing from the Defleco operator UI; normal camera setup is intentionally delegated to Basler pylon Viewer while acquisition remains in Defleco.

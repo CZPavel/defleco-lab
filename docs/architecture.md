@@ -52,13 +52,26 @@ screening still prioritises fine stripes, checkerboard, single spiral and rings.
 
 Pattern state is deterministic in static/stepped mode. This makes a software-level
 step-and-capture sequence possible without pretending that the display and camera
-have hardware-level frame synchronization. Continuous rotation remains available
-for visual screening.
+have hardware-level frame synchronization. Continuous rotation, phase sweep and
+period breathing can be combined for visual screening.
 
-The earlier standalone dynamic-pattern PoC remains the design source for timing/sync,
-breathing, centre-offset and other future pattern-output features; the integrated
-application should continue reusing those established concepts rather than
-rediscovering them.
+`PatternOutputWindow` is a native `QOpenGLWindow` with an OpenGL 3.3 procedural
+fragment shader (`pattern_shader.py`). Each analytic pattern is evaluated on the
+GPU in physical display pixels. Only deterministic speckle is generated on the
+CPU and uploaded as a cached texture. The offline `render_pattern` Mono8 API is
+preserved as the reference renderer.
+
+The window requests double buffering and swap interval 1. Continuous updates are
+scheduled from `frameSwapped`, with motion advanced using monotonic elapsed time.
+There is no software animation-FPS timer or intermediate downscaled pixmap.
+Binary patterns use subpixel edge coverage; angular patterns use analytic
+derivatives to avoid a false seam at the atan branch boundary. Rotation is
+360-degree periodic; starburst phase is 720-degree periodic.
+
+The display driver/compositor ultimately controls scanout. A completed swap is a
+software presentation boundary, not proof of optical settling or synchronized
+camera exposure. The earlier standalone dynamic-pattern PoC remains the design
+source for pattern-family semantics and future synchronization work.
 
 ## Automated screening
 
@@ -68,7 +81,7 @@ The screening runner separates acquisition from analysis:
 deterministic pattern cases
         |
         v
-step pattern -> settle -> acquire newer camera frame
+step pattern -> confirmed buffer swap -> settle -> acquire newer camera frame
         |
         v
 lossless RAW image + capture_manifest.json
@@ -90,6 +103,11 @@ results_manifest.json
 This avoids reacquiring the vehicle for every processing or display variant and
 prevents a blind Cartesian product of arbitrary parameters. Multi-frame recipes use
 ordered states from the same pattern group.
+
+Presentation is tracked by settings revision. A capture case must complete its
+own buffer swap before its settle interval starts. Initialization/render failure,
+loss of visible output, or a five-second initial presentation timeout stops
+capture and marks its manifest as an error.
 
 ## Acquisition lifecycle
 

@@ -33,6 +33,32 @@ These observations are experimental notes, not yet a ranking of methods.
 
 ## Architecture decision
 
+### Pattern presentation correction 2026-10-23
+
+- [x] Replaced full-frame GUI-thread NumPy generation/copy/scaling with an
+      OpenGL 3.3 full-screen procedural surface; CPU `render_pattern` remains the
+      deterministic offline reference and cached seeded-speckle source.
+- [x] Requested double-buffered swap interval 1 and scheduled continuous output
+      from `frameSwapped`; monotonic elapsed time preserves speed when frames lag.
+- [x] Preserved physical-pixel period/DPR semantics; added binary edge coverage
+      with analytic angular derivatives to avoid atan branch seams.
+- [x] Fixed non-periodic angle/phase wraps and gated capture settling/error paths
+      on the actual pattern presentation boundary.
+- [~] Local native 2160x3840 GPU benchmark completed in roughly 3-4 ms median
+      (old CPU path roughly 190-550 ms). Beyond TV portrait output reported swap
+      interval 1 and median 16.70 ms, p95 19.17 ms, max 20.95 ms over a bounded
+      271-frame run. These are software/GPU presentation results, not physical
+      proof of zero scanout tearing or camera/display synchronization.
+- [x] Bounded main-application checks exercised slow phase-only stripes, fast
+      rotating/phase-swept spiral, breathing squircle and starburst, plus static
+      idle and stepped presentation. Median intervals were 16.47-16.72 ms;
+      p95 18.65-19.34 ms, with one approximately 30 ms interval on slow stripes.
+      No camera was opened or configured.
+
+The legacy `render_scale` and `animation_fps` fields remain serializable for
+compatibility, but live GPU output always uses native pixels and display cadence.
+OpenGL acceptance is explicit and separate from camera-independent normal CI.
+
 The analysis path is deliberately split into four layers:
 
 1. **Pre-processing**: transforms the camera image before a method.
@@ -149,12 +175,12 @@ Findings / actions:
       64 live frames, 16 camera-mailbox frames and up to 64 recorder copies. At
       multi-megapixel Mono8 resolution this can consume several hundred MB before
       method working buffers; physical monitoring on the target PC is still useful;
-- [~] continuous 4K pattern animation remains GUI-thread rendered. The default 50%
-      render scale reduces load, but physical testing should watch GUI responsiveness
-      and camera-buffer drops during continuous patterns;
-- [ ] do not tune buffer sizes or further optimise pattern rendering without evidence
-      from the target workstation; the existing bounds are safe enough for the
-      current ~6 FPS PoC and preserve useful temporal history.
+- [x] the earlier GUI-thread CPU rendering limitation was replaced on 2026-10-23
+      by native-resolution GPU rendering after measurements on the target PC;
+      see the pattern presentation correction above. Combined live-camera and
+      continuous-pattern performance still needs physical validation;
+- [ ] tune buffer sizes only when new measurements justify it; the existing bounds
+      preserve useful temporal history for the established ~6 FPS camera PoC.
 
 ## Camera connection reliability review 2026-09-28
 
