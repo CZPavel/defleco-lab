@@ -1,5 +1,18 @@
 # Dynamic pattern artifacts and presentation diagnostics
 
+## Current target and verified GPU routing
+
+The 65-inch TV intentionally remains **1080x1920 portrait at 60 Hz**. There is no
+resolution migration in this iteration. Period is in framebuffer pixels before
+TV scaling; the operator-supplied 2160x3840 panel size implies ideal 2x scaling.
+
+A subsequent controlled comparison confirmed a change from Intel to NVIDIA after
+Windows Graphics Preference targeted the actual base `pythonw.exe` image rather
+than only its venv launcher. The user observed ARTIFACT on Intel and CLEAN/clearly
+improved on NVIDIA with identical sinusoidal-stripe settings. See
+[nvidia-render-path-test.md](nvidia-render-path-test.md) for evidence, scope and limits.
+Earlier observations below are retained as dated historical evidence.
+
 ## Distinguish three boundaries
 
 1. **Rendered pixels:** wrong math, stale framebuffer regions, invalid GL state or

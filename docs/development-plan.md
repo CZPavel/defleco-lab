@@ -33,6 +33,25 @@ These observations are experimental notes, not yet a ranking of methods.
 
 ## Architecture decision
 
+### NVIDIA route verification 2026-10-26
+
+- [x] Fixed target for the current TV PoC remains 1080x1920 portrait at 60 Hz;
+      native panel dimensions are operator-supplied 2160x3840, an estimated 2x
+      scale. Period is in framebuffer pixels before TV scaling.
+- [x] Measured venv launcher versus actual base pythonw.exe with WinAPI process
+      identity and independent PIDs; added read-only GPU preference and exact
+      monitor/adapter diagnostics plus context lifecycle snapshots.
+- [x] Used Windows per-executable High Performance preference on the measured
+      base pythonw.exe and restarted. Actual application GL_RENDERER changed from
+      Intel UHD to NVIDIA RTX A5000; no shader/AA/motion math was changed.
+- [x] Matched 60-second sinusoidal A/B: user observed Intel ARTIFACT and NVIDIA
+      CLEAN/clearly improved. Both 1080p readback pairs matched within 1 Mono8 level.
+      NVIDIA cadence median16.662/p95 17.114 ms versus Intel16.639/p95 18.726 ms.
+- [~] The practical result supports hybrid routing relevance; it is not a blanket
+      claim for sharp/binary patterns, all TV processing, drivers or camera sync.
+      Next test retains NVIDIA and checks the original sharp case before further
+      shader work. See [nvidia-render-path-test.md](nvidia-render-path-test.md).
+
 ### Residual artifact investigation 2026-10-26
 
 - [x] Added independent animated binary-stripe reference checks for the reported

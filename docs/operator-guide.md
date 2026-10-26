@@ -122,6 +122,20 @@ of 1 requests VSync; it does not prove the final panel scans out without tearing
 GPU/driver identity and recent swap timing summary. For persistent artifacts, see
 [pattern-rendering-diagnostics.md](pattern-rendering-diagnostics.md).
 
+GPU diagnostics distinguish `sys.executable`, base interpreter and the actual
+WinAPI process image. On Windows a venv launcher can spawn a shared base Python;
+Graphics Preference must be checked against the image that really renders.
+The panel shows **NVIDIA renderer active** when measured, or suspects a hybrid
+path only when the mapped display adapter and renderer vendors differ. Intel is
+a diagnostic state, not automatically a fault.
+
+The **Native panel width/height (assumed)** fields describe operator-supplied panel
+dimensions for scaling diagnostics only. Their PoC defaults are 2160x3840; they do
+not change Windows mode or rendering resolution. Current operation is 1080x1920
+at 60 Hz. A period of 50 px means 50 framebuffer pixels, approximately 100 native
+TV pixels at ideal 2x scaling. Non-2x estimates are flagged; actual TV processing
+and optical geometry are not calibrated by this estimate.
+
 ## Recording raw sessions
 
 1. Start **Live** first. Record intentionally refuses to start when no new frames

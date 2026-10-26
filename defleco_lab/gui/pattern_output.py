@@ -12,6 +12,12 @@ from time import perf_counter
 import numpy as np
 from PySide6 import QtCore, QtGui, QtOpenGL, QtWidgets
 
+from .gpu_identity import (
+    display_adapter_for_rect,
+    gpu_preferences,
+    process_identity,
+    render_path_status,
+)
 from .pattern_motion import frame_motion_samples
 from .pattern_shader import PatternShader
 
@@ -215,12 +221,54 @@ class PatternOutputWindow(QtOpenGL.QOpenGLWindow):
         self._last_motion_samples: tuple[PatternSettings, ...] = ()
         self._graphics_info: dict = {}
         self._swap_times: deque[float] = deque(maxlen=241)
+        self._context_lifecycle: list[dict] = []
+        self._panel_native_size: tuple[int, int] | None = None
+        self._record_context_event("constructed")
         self.frameSwapped.connect(self._frame_swapped)
 
     def display_diagnostics(self) -> dict:
         intervals = np.diff(self._swap_times) * 1000.0
         screen = self.screen()
+        identity = process_identity()
+        geometry = screen.geometry() if screen else QtCore.QRect()
+        # Exact rectangle mapping only; a scaled/mixed-DPI ambiguity stays unknown.
+        adapter = display_adapter_for_rect(
+            geometry.x(), geometry.y(), geometry.width(), geometry.height()
+        )
+        if screen and abs(screen.devicePixelRatio() - 1.0) > 1e-6:
+            adapter = {
+                "status": "unknown", "adapter_name": None, "device_name": None,
+                "mapping_method": "scaled Qt/WinAPI rectangle mapping not verified",
+            }
+        width, height = round(self.width() * self.devicePixelRatio()), round(
+            self.height() * self.devicePixelRatio()
+        )
+        panel_width, panel_height = self._panel_native_size or (None, None)
+        scale_x = panel_width / width if panel_width and width else None
+        scale_y = panel_height / height if panel_height and height else None
         return {
+            "process": identity,
+            "windows_gpu_preferences": gpu_preferences(
+                [identity["executable"], identity["base_executable"], identity["process_image_path"]]
+            ),
+            "display_adapter": adapter,
+            "render_path_status": render_path_status(
+                self._graphics_info.get("renderer"), adapter.get("adapter_name")
+            ),
+            "context_lifecycle": list(self._context_lifecycle),
+            "device_pixel_ratio": self.devicePixelRatio(),
+            "framebuffer_width": width,
+            "framebuffer_height": height,
+            "physical_panel_width": panel_width,
+            "physical_panel_height": panel_height,
+            "panel_size_source": "operator supplied; not auto-detected",
+            "estimated_scale_x": scale_x,
+            "estimated_scale_y": scale_y,
+            "panel_scaling_warning": bool(
+                scale_x is not None and scale_y is not None
+                and (abs(scale_x - 2.0) > 1e-6 or abs(scale_y - 2.0) > 1e-6)
+            ),
+            "period_coordinate_basis": "framebuffer pixels before TV scaling",
             "settings": self._settings.as_dict(),
             "last_submitted_settings": self.effective_settings.as_dict(),
             "temporal_samples": len(self._last_motion_samples) or 1,
@@ -238,6 +286,20 @@ class PatternOutputWindow(QtOpenGL.QOpenGLWindow):
             "render_error": self._render_error,
             "scanout_verified": False,
         }
+
+    def set_panel_native_size(self, width: int, height: int) -> None:
+        self._panel_native_size = (int(width), int(height)) if width > 0 and height > 0 else None
+
+    def _record_context_event(self, stage: str) -> None:
+        context = self.context()
+        self._context_lifecycle.append({
+            "stage": stage,
+            "window_screen": self.screen().name() if self.screen() else None,
+            "context_exists": context is not None,
+            "context_valid": context.isValid() if context else False,
+            "context_screen": context.screen().name() if context and context.screen() else None,
+        })
+        self._context_lifecycle = self._context_lifecycle[-24:]
 
     @property
     def has_presented_frame(self) -> bool:
@@ -303,11 +365,13 @@ class PatternOutputWindow(QtOpenGL.QOpenGLWindow):
         self.stateChanged.emit(self.effective_settings)
 
     def show_on_screen(self, screen_index: int) -> None:
+        self._record_context_event("before_target_screen")
         screens = QtGui.QGuiApplication.screens()
         if screens:
             screen = screens[max(0, min(int(screen_index), len(screens) - 1))]
             self.setScreen(screen)
             self.setGeometry(screen.geometry())
+        self._record_context_event("target_screen_assigned_before_expose")
         self.showFullScreen()
         QtCore.QTimer.singleShot(1500, self._check_context)
         self._redraw()
@@ -350,6 +414,7 @@ class PatternOutputWindow(QtOpenGL.QOpenGLWindow):
         super().keyPressEvent(event)
 
     def initializeGL(self) -> None:
+        self._record_context_event("initializeGL")
         try:
             self._shader.initialize(self.context())
             self._render_error = ""
@@ -633,6 +698,18 @@ class PatternControlPanel(QtWidgets.QGroupBox):
             "Disable for instantaneous sharp-frame comparisons."
         )
 
+        self.panel_width = QtWidgets.QSpinBox()
+        self.panel_height = QtWidgets.QSpinBox()
+        for field, default in ((self.panel_width, 2160), (self.panel_height, 3840)):
+            field.setRange(0, 16384)
+            field.setValue(default)
+            field.setSuffix(" px")
+            field.setSpecialValueText("Unknown")
+            field.setToolTip(
+                "Operator-supplied native panel size for scaling diagnostics only. "
+                "Does not change Windows resolution or pattern generation."
+            )
+
         self.step_size = QtWidgets.QDoubleSpinBox()
         self.step_size.setRange(0.1, 180.0)
         self.step_size.setValue(15.0)
@@ -699,6 +776,8 @@ class PatternControlPanel(QtWidgets.QGroupBox):
         self.output.renderFailed.connect(self._render_failed)
         self.output.graphicsInfoChanged.connect(self._graphics_changed)
         form.addRow("Output display", self.screen)
+        form.addRow("Native panel width (assumed)", self.panel_width)
+        form.addRow("Native panel height (assumed)", self.panel_height)
         form.addRow(buttons)
         form.addRow(self.diagnostics_button)
 
@@ -734,6 +813,9 @@ class PatternControlPanel(QtWidgets.QGroupBox):
         self.show_button.clicked.connect(self.show_output)
         self.hide_button.clicked.connect(self.output.hide_output)
         self.step_button.clicked.connect(self.output.step)
+        self.panel_width.valueChanged.connect(self._panel_size_changed)
+        self.panel_height.valueChanged.connect(self._panel_size_changed)
+        self._panel_size_changed()
         self._update_context()
         self._settings_changed()
 
@@ -742,11 +824,15 @@ class PatternControlPanel(QtWidgets.QGroupBox):
         self.output.hide_output()
 
     def _graphics_changed(self, info: dict) -> None:
+        diagnostics = self.output.display_diagnostics()
         self.render_status.setText(
-            f"{info.get('renderer', 'GPU')}; VSync requested "
+            f"{info.get('renderer', 'GPU')}; {diagnostics['render_path_status']}. VSync requested "
             f"(context interval {info.get('context_swap_interval')}). "
             "Physical display synchronization is not verified."
         )
+
+    def _panel_size_changed(self, *_args: object) -> None:
+        self.output.set_panel_native_size(self.panel_width.value(), self.panel_height.value())
 
     def _save_diagnostics(self) -> None:
         filename, _ = QtWidgets.QFileDialog.getSaveFileName(

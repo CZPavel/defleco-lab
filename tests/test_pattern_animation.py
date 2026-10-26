@@ -106,6 +106,30 @@ def test_hidden_edits_are_lazy_and_panel_uses_native_cadence():
     assert app is not None
 
 
+def test_display_diagnostics_distinguish_framebuffer_and_operator_panel_size():
+    import json
+
+    app = _app()
+    output = PatternOutputWindow()
+    output.resize(1080, 1920)
+    output.set_panel_native_size(2160, 3840)
+    diagnostics = output.display_diagnostics()
+    assert diagnostics["framebuffer_width"] == 1080
+    assert diagnostics["framebuffer_height"] == 1920
+    assert diagnostics["estimated_scale_x"] == diagnostics["estimated_scale_y"] == 2
+    assert not diagnostics["panel_scaling_warning"]
+    assert "operator supplied" in diagnostics["panel_size_source"]
+    assert diagnostics["context_lifecycle"][0]["context_exists"] is False
+    assert diagnostics["process"]["pid"] > 0
+    assert json.loads(json.dumps(diagnostics))["scanout_verified"] is False
+    output.resize(1000, 1920)
+    assert output.display_diagnostics()["panel_scaling_warning"]
+    output.set_panel_native_size(0, 0)
+    assert output.display_diagnostics()["estimated_scale_x"] is None
+    output.close()
+    assert app is not None
+
+
 def test_capture_settle_starts_after_presentation_and_aborts_on_lost_output(monkeypatch, tmp_path):
     from defleco_lab.gui import main_window
 

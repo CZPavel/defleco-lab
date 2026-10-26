@@ -86,6 +86,17 @@ software presentation boundary, not proof of optical settling or synchronized
 camera exposure. The earlier standalone dynamic-pattern PoC remains the design
 source for pattern-family semantics and future synchronization work.
 
+Read-only `gpu_identity.py` records interpreter and WinAPI process-image identity,
+per-executable Windows GPU preference, and exact monitor-to-adapter mapping. Scaled
+Qt/WinAPI coordinate layouts remain unresolved instead of guessing an adapter.
+Window lifecycle snapshots establish when target screen assignment and context
+creation occurred; context `screen()` is metadata, not proof of rendering GPU.
+`GL_RENDERER` remains the decisive rendering identity.
+
+Operator-supplied native panel dimensions are distinct from framebuffer dimensions
+and from Qt devicePixelRatio. The fixed TV PoC uses 1080x1920@60 with an assumed
+2160x3840 panel; diagnostics estimate 2x scaling without reconfiguring the display.
+
 ## Automated screening
 
 The screening runner separates acquisition from analysis:

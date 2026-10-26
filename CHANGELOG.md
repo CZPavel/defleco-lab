@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Added actual interpreter/process-image identity, read-only Windows GPU preferences, monitor-adapter mapping and context lifecycle evidence to display diagnostics.
+- Added operator-supplied native panel size and estimated TV scaling, separate from framebuffer pixels and Qt DPR; current TV operation remains 1080x1920@60.
+- Added bounded real-application render-path A/B tooling with exact sinusoidal presets, pre-swap readbacks and physical-observation fields; no shader/AA/motion changes.
+- Confirmed NVIDIA rendering after an application-specific Windows High Performance preference for the actual base pythonw.exe; documented user-observed Intel ARTIFACT versus NVIDIA CLEAN/improved.
+
 - Added a dedicated animated-stripe artifact diagnostic with independent float64 AA reference, deterministic repeated draws, pre-swap readback and strict per-pixel corruption detection.
 - Replaced affine numeric derivatives and GPU orientation trigonometry with analytic gradients and CPU orientation coefficients, removing measured Intel edge discrepancies.
 - Hardened full-frame GL state, opaque surface setup, context-loss handling and error reporting.
