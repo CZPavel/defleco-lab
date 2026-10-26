@@ -36,6 +36,10 @@ uniform bool sinusoidal;
 uniform bool inverted;
 uniform bool antialias;
 uniform sampler2D speckle;
+uniform vec4 motionStates[8]; // cos(angle), sin(angle), phase cycles, physical period
+uniform float motionAngles[8];
+uniform vec2 orientation;
+uniform int motionCount;
 out vec4 color;
 const float TAU = 6.283185307179586;
 
@@ -54,9 +58,70 @@ float binaryCarrier(float cycles, float width, bool line, float footprint) {
 float binaryCarrier(float cycles, float width, bool line) {
     return binaryCarrier(cycles, width, line, fwidth(cycles));
 }
-float carrier(float cycles) {
+float carrier(float cycles, float footprint) {
     if (sinusoidal) return (sin(TAU * cycles) + 1.0) * 0.5;
-    return binaryCarrier(cycles, duty, false);
+    return binaryCarrier(cycles, duty, false, footprint);
+}
+float evaluateSignal(vec2 xy, vec4 state, float sampleAngle) {
+    float samplePhase = state.z, samplePeriod = state.w;
+    float localPhase = samplePhase + dot(tilt, xy / max(dimensions - 1.0, vec2(1.0)));
+    float c = state.x, s = state.y;
+    vec2 rotated = vec2(c*xy.x + s*xy.y, -s*xy.x + c*xy.y);
+    float radius = length(xy);
+    float theta = radius == 0.0 ? 0.0 : atan(xy.y, xy.x);
+    // Analytic derivatives stay continuous across atan's -pi/+pi seam.
+    vec2 angularGradient = vec2(-xy.y, xy.x) / max(dot(xy, xy), 0.25);
+    vec2 radialGradient = xy / max(radius, 0.000001) / samplePeriod;
+    vec2 phaseGradient = tilt / max(dimensions - 1.0, vec2(1.0));
+    vec2 xGradient = vec2(c, s) / samplePeriod + phaseGradient;
+    vec2 yGradient = vec2(-s, c) / samplePeriod + phaseGradient;
+    float xFootprint = abs(xGradient.x) + abs(xGradient.y);
+    float yFootprint = abs(yGradient.x) + abs(yGradient.y);
+    float signal;
+    if (family == 1) {
+        float a = binaryCarrier((rotated.x / samplePeriod + localPhase) * 0.5,
+                                0.5, false, xFootprint * 0.5);
+        float b = binaryCarrier((rotated.y / samplePeriod + localPhase) * 0.5,
+                                0.5, false, yFootprint * 0.5);
+        signal = a*b + (1.0-a)*(1.0-b);
+    } else if (family == 2) {
+        float cycles = radius / samplePeriod + localPhase;
+        signal = carrier(cycles, fwidth(cycles));
+    } else if (family == 3) {
+        signal = 0.5 * (carrier(rotated.x / samplePeriod + localPhase, xFootprint)
+                      + carrier(rotated.y / samplePeriod + localPhase, yFootprint));
+    } else if (family == 4 || family == 5) {
+        vec2 a = abs(rotated);
+        float scale = max(a.x, a.y);
+        float metric = scale;
+        if (family == 5 && scale > 0.0) {
+            vec2 normalized = a / scale;
+            metric *= pow(pow(normalized.x, powerValue)
+                        + pow(normalized.y, powerValue), 1.0 / powerValue);
+        }
+        signal = binaryCarrier(metric / samplePeriod + localPhase, duty, true);
+    } else if (family == 6 || family == 7) {
+        float cycles = radius / samplePeriod - arms * (theta-sampleAngle) / TAU;
+        vec2 gradient = radialGradient - arms / TAU * angularGradient + phaseGradient;
+        signal = binaryCarrier(cycles + localPhase, spiralWidth, true,
+                               abs(gradient.x) + abs(gradient.y));
+        if (family == 7) {
+            float opposite = radius / samplePeriod + arms * (theta+sampleAngle) / TAU;
+            vec2 oppositeGradient = radialGradient + arms / TAU * angularGradient
+                                    + phaseGradient;
+            signal = max(signal, binaryCarrier(opposite + localPhase, spiralWidth, true,
+                         abs(oppositeGradient.x) + abs(oppositeGradient.y)));
+        }
+    } else if (family == 8) {
+        vec2 gradient = spokes / TAU * angularGradient + phaseGradient * 0.5;
+        signal = binaryCarrier((theta-sampleAngle) * spokes / TAU + localPhase * 0.5,
+                               0.5, false, abs(gradient.x) + abs(gradient.y));
+    } else if (family == 10) {
+        signal = 1.0;
+    } else {
+        signal = carrier(rotated.x / samplePeriod + localPhase, xFootprint);
+    }
+    return signal;
 }
 void main() {
     vec2 pixel = vec2(gl_FragCoord.x - 0.5,
@@ -67,55 +132,17 @@ void main() {
         return;
     }
     vec2 xy = pixel - (dimensions - 1.0) * 0.5 - dimensions * centerShift;
-    float localPhase = phase + dot(tilt, xy / max(dimensions - 1.0, vec2(1.0)));
-    float c = cos(angle), s = sin(angle);
-    vec2 rotated = vec2(c*xy.x + s*xy.y, -s*xy.x + c*xy.y);
-    float radius = length(xy);
-    float theta = radius == 0.0 ? 0.0 : atan(xy.y, xy.x);
-    // Analytic derivatives stay continuous across atan's -pi/+pi seam.
-    vec2 angularGradient = vec2(-xy.y, xy.x) / max(dot(xy, xy), 0.25);
-    vec2 radialGradient = xy / max(radius, 0.000001) / period;
-    vec2 phaseGradient = tilt / max(dimensions - 1.0, vec2(1.0));
     float signal;
-    if (family == 1) {
-        float a = binaryCarrier((rotated.x / period + localPhase) * 0.5, 0.5, false);
-        float b = binaryCarrier((rotated.y / period + localPhase) * 0.5, 0.5, false);
-        signal = a*b + (1.0-a)*(1.0-b);
-    } else if (family == 2) {
-        signal = carrier(radius / period + localPhase);
-    } else if (family == 3) {
-        signal = 0.5 * (carrier(rotated.x / period + localPhase)
-                      + carrier(rotated.y / period + localPhase));
-    } else if (family == 4 || family == 5) {
-        vec2 a = abs(rotated);
-        float scale = max(a.x, a.y);
-        float metric = scale;
-        if (family == 5 && scale > 0.0) {
-            vec2 normalized = a / scale;
-            metric *= pow(pow(normalized.x, powerValue)
-                        + pow(normalized.y, powerValue), 1.0 / powerValue);
-        }
-        signal = binaryCarrier(metric / period + localPhase, duty, true);
-    } else if (family == 6 || family == 7) {
-        float cycles = radius / period - arms * (theta-angle) / TAU;
-        vec2 gradient = radialGradient - arms / TAU * angularGradient + phaseGradient;
-        signal = binaryCarrier(cycles + localPhase, spiralWidth, true,
-                               abs(gradient.x) + abs(gradient.y));
-        if (family == 7) {
-            float opposite = radius / period + arms * (theta+angle) / TAU;
-            vec2 oppositeGradient = radialGradient + arms / TAU * angularGradient
-                                    + phaseGradient;
-            signal = max(signal, binaryCarrier(opposite + localPhase, spiralWidth, true,
-                         abs(oppositeGradient.x) + abs(oppositeGradient.y)));
-        }
-    } else if (family == 8) {
-        vec2 gradient = spokes / TAU * angularGradient + phaseGradient * 0.5;
-        signal = binaryCarrier((theta-angle) * spokes / TAU + localPhase * 0.5,
-                               0.5, false, abs(gradient.x) + abs(gradient.y));
-    } else if (family == 10) {
+    if (family == 10) {
         signal = 1.0;
+    } else if (motionCount == 0) {
+        signal = evaluateSignal(xy, vec4(orientation, phase, period), angle);
     } else {
-        signal = carrier(rotated.x / period + localPhase);
+        signal = 0.0;
+        for (int i = 0; i < motionCount; ++i) {
+            signal += evaluateSignal(xy, motionStates[i], motionAngles[i]);
+        }
+        signal /= float(motionCount);
     }
     if (inverted) signal = 1.0 - signal;
     float value = roundEven(clamp(signal * peak, 0.0, 255.0)) / 255.0;
@@ -144,6 +171,8 @@ class PatternShader:
 
     def initialize(self, context: QtGui.QOpenGLContext) -> None:
         """Compile in the supplied current OpenGL 3.3 context."""
+        if QtGui.QOpenGLContext.currentContext() != context:
+            raise RuntimeError("Pattern shader initialization requires its current context")
         self.close()
         self._context = context
         program = QtOpenGL.QOpenGLShaderProgram()
@@ -161,18 +190,43 @@ class PatternShader:
             for name in (
                 "dimensions", "centerShift", "tilt", "period", "angle", "phase",
                 "duty", "powerValue", "spiralWidth", "arms", "spokes", "peak",
-                "family", "sinusoidal", "inverted", "antialias", "speckle",
+                "family", "sinusoidal", "inverted", "antialias", "speckle", "motionCount", "orientation",
+                *(f"motionStates[{index}]" for index in range(8)),
             )
         }
+        self._uniform_locations.update({
+            f"motionAngles[{i}]": program.uniformLocation(f"motionAngles[{i}]") for i in range(8)
+        })
         self._vao = QtOpenGL.QOpenGLVertexArrayObject()
         if not self._vao.create():
             raise RuntimeError("Cannot create pattern shader vertex array")
 
     def draw(self, settings: PatternSettings, width: int, height: int,
-             antialias: bool = True) -> None:
-        """Draw to the current framebuffer; dimensions are physical display pixels."""
+             antialias: bool = True,
+             motion_samples: tuple[PatternSettings, ...] = ()) -> None:
+        """Draw physical pixels, optionally averaging up to eight temporal states.
+
+        Samples replace the instantaneous state and may vary only angle, phase,
+        and period; their unquantized signals are averaged before Mono8 rounding.
+        Speckle and solid remain static regardless of supplied temporal samples.
+        """
         if self._program is None or self._vao is None or self._context is None:
             raise RuntimeError("PatternShader has not been initialized")
+        if QtGui.QOpenGLContext.currentContext() != self._context:
+            raise RuntimeError("Pattern shader draw requires its owning current context")
+        if len(motion_samples) > 8:
+            raise RuntimeError("Pattern shader supports at most eight motion samples")
+        fixed_fields = (
+            "family", "waveform", "center_x_percent", "center_y_percent",
+            "phase_tilt_x_deg", "phase_tilt_y_deg", "duty_percent", "squircle_power",
+            "spiral_width_percent", "spiral_arms", "spokes", "brightness", "invert",
+            "speckle_size_px", "seed",
+        )
+        for sample in motion_samples:
+            if any(getattr(sample, name) != getattr(settings, name) for name in fixed_fields):
+                raise RuntimeError("Motion samples must share frame geometry and appearance")
+        if settings.family in {"speckle", "solid"}:
+            motion_samples = ()
         width, height = max(2, int(width)), max(2, int(height))
         if settings.family == "speckle":
             key = (width, height, settings)
@@ -196,8 +250,16 @@ class PatternShader:
         gl.glDisable(0x0BE2)  # GL_BLEND
         gl.glDisable(0x0BD0)  # GL_DITHER: preserve explicit Mono8 quantization.
         gl.glDisable(0x8DB9)  # GL_FRAMEBUFFER_SRGB
+        gl.glDisable(0x0C11)  # GL_SCISSOR_TEST
+        gl.glDisable(0x0B90)  # GL_STENCIL_TEST
+        gl.glDisable(0x0B44)  # GL_CULL_FACE
+        gl.glDisable(0x8C89)  # GL_RASTERIZER_DISCARD
+        gl.glColorMask(True, True, True, True)
+        gl.glClearColor(0.0, 0.0, 0.0, 1.0)
+        gl.glClear(0x00004000)  # GL_COLOR_BUFFER_BIT
         program = self._program
-        program.bind()
+        if not program.bind():
+            raise RuntimeError(f"Cannot bind pattern shader: {program.log()}")
         uniforms = {
             "dimensions": QtGui.QVector2D(width, height),
             "centerShift": QtGui.QVector2D(settings.center_x_percent / 100.0,
@@ -206,6 +268,8 @@ class PatternShader:
                                     settings.phase_tilt_y_deg / 360.0),
             "period": max(2.0, float(settings.period_px)),
             "angle": math.radians(settings.angle_deg),
+            "orientation": QtGui.QVector2D(math.cos(math.radians(settings.angle_deg)),
+                                            math.sin(math.radians(settings.angle_deg))),
             "phase": (settings.phase_deg % (720.0 if settings.family == "starburst"
                                             else 360.0)) / 360.0,
             "duty": min(0.99, max(0.01, settings.duty_percent / 100.0)),
@@ -219,10 +283,18 @@ class PatternShader:
             "inverted": settings.invert,
             "antialias": antialias,
             "speckle": 0,
+            "motionCount": len(motion_samples),
         }
+        for index, sample in enumerate(motion_samples):
+            uniforms[f"motionStates[{index}]"] = QtGui.QVector4D(
+                math.cos(math.radians(sample.angle_deg)), math.sin(math.radians(sample.angle_deg)),
+                (sample.phase_deg % (720.0 if sample.family == "starburst" else 360.0)) / 360.0,
+                max(2.0, float(sample.period_px)),
+            )
+            uniforms[f"motionAngles[{index}]"] = math.radians(sample.angle_deg)
         for name, value in uniforms.items():
             location = self._uniform_locations[name]
-            if isinstance(value, QtGui.QVector2D):
+            if isinstance(value, (QtGui.QVector2D, QtGui.QVector4D)):
                 program.setUniformValue(location, value)
             elif isinstance(value, (bool, int)):
                 program.setUniformValue1i(location, int(value))
@@ -236,6 +308,9 @@ class PatternShader:
         if settings.family == "speckle" and self._texture is not None:
             self._texture.release(0)
         program.release()
+        error = gl.glGetError()
+        if error:
+            raise RuntimeError(f"Pattern shader OpenGL error: 0x{error:04x}")
 
     def close(self) -> None:
         """Release GPU resources while their owning context is current."""

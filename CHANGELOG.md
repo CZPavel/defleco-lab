@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Added a dedicated animated-stripe artifact diagnostic with independent float64 AA reference, deterministic repeated draws, pre-swap readback and strict per-pixel corruption detection.
+- Replaced affine numeric derivatives and GPU orientation trigonometry with analytic gradients and CPU orientation coefficients, removing measured Intel edge discrepancies.
+- Hardened full-frame GL state, opaque surface setup, context-loss handling and error reporting.
+- Added optional four-sample continuous-motion smoothing for fine rotating/breathing patterns, plus live GPU identity and display-diagnostics JSON export. Static/stepped patterns remain unchanged.
+- Documented the distinction between temporal aliasing, application buffer swaps and physical tearing, including hybrid Intel/NVIDIA troubleshooting.
+
 - Replaced GUI-thread NumPy/pixmap pattern animation with native-resolution OpenGL 3.3 procedural rendering, double-buffered VSync requests, and swap-driven timing.
 - Added subpixel binary-edge coverage without angular seams; fixed spiral rotation jumps at 180 degrees and starburst phase jumps at 360 degrees.
 - Removed live output downscale/software-FPS controls; retained deterministic CPU Mono8 generation and seeded speckle for offline workflows.

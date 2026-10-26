@@ -102,6 +102,12 @@ removed: lowering resolution is no longer needed for continuous output. Binary
 edges use subpixel coverage to reduce visible stepping during slow movement.
 Period remains specified in physical display pixels, including Windows scaling.
 For phase-only motion, set rotation speed to zero and use **Phase sweep**.
+**Smooth movement over one display frame** is enabled by default in Continuous
+mode. It averages four points on the rotation/phase/breathing timeline over one
+reported refresh interval. This reduces temporal strobing of fine patterns at the
+cost of softer moving edges. Disable it to compare sharp instantaneous frames.
+Static and Stepped modes keep their original sharp output. Smoothing is a display
+filter, not a camera exposure or metrological correction.
 Rotation wraps at 360 degrees; starburst phase has a 720-degree cycle because
 360 degrees shifts it by one bright/dark sector.
 
@@ -109,6 +115,12 @@ Automated capture starts the settle interval after the requested pattern has
 completed a buffer swap. If the output fails or disappears, capture stops with an
 error rather than recording a case under an unpresented pattern. A buffer swap
 does not establish camera/display hardware synchronization or optical settling.
+
+The status text reports the actual OpenGL GPU and context swap interval. An interval
+of 1 requests VSync; it does not prove the final panel scans out without tearing.
+**Save display diagnostics** exports the current configuration, submitted state,
+GPU/driver identity and recent swap timing summary. For persistent artifacts, see
+[pattern-rendering-diagnostics.md](pattern-rendering-diagnostics.md).
 
 ## Recording raw sessions
 

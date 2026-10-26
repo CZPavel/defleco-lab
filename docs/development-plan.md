@@ -33,6 +33,32 @@ These observations are experimental notes, not yet a ranking of methods.
 
 ## Architecture decision
 
+### Residual artifact investigation 2026-10-26
+
+- [x] Added independent animated binary-stripe reference checks for the reported
+      period 50 px, rotation 20 deg/s, breathing 20% at 0.5 Hz; validated pre-swap
+      native frames rather than inferring image integrity from frame cadence.
+- [x] Removed measured Intel edge discrepancies using analytic affine gradients
+      and CPU sine/cosine coefficients; added full-frame GL state reset, clear,
+      context/bind/error checks, opaque format and reset-notification request.
+- [x] Added optional four-sample temporal smoothing for continuous patterns. It
+      mitigates temporal strobing by softening moving edges; static/step output is
+      unchanged. Eight samples exceeded the local integrated GPU frame budget,
+      so four were selected and checked at approximately 60 swaps/s.
+- [x] Added actual GPU identity and JSON diagnostic export. Confirmed Intel
+      rendering despite NVIDIA-connected external HDMI output; this hybrid path
+      is relevant evidence, not a proven root cause. No driver settings changed.
+- [x] Independent review caught a global-error-percentage diagnostic blind spot;
+      strict per-pixel tolerance and injected patch/single-pixel tests now prevent
+      small corrupt regions from being accepted.
+- [~] Native FHD samples and a 4K computational sweep matched the reference within
+      1 Mono8 level; repeated frames were identical. Physical tearing/random
+      unsampled corruption and optical behavior remain acceptance-pending.
+
+See [pattern rendering diagnostics](pattern-rendering-diagnostics.md) for the
+reproduction commands, measured results, driver readback limitations and targeted
+Windows/NVIDIA checks.
+
 ### Pattern presentation correction 2026-10-23
 
 - [x] Replaced full-frame GUI-thread NumPy generation/copy/scaling with an

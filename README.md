@@ -116,6 +116,19 @@ hidden output stops animating. It opens no camera and changes no device settings
 These software checks do not establish zero physical tearing or camera/display
 hardware synchronization.
 
+For moving binary stripes with breathing/rotation, the dedicated artifact check
+compares an animated sequence against an independent float64 pixel reference:
+
+```powershell
+.\.venv\Scripts\python.exe tools\pattern_artifact_diagnostics.py --screen 1 --motion-smoothing
+```
+
+The check reads selected images **before** buffer swap, checks repeated draws and
+every pixel's error, and reports the actual OpenGL renderer. Use **Save display
+diagnostics** in Pattern generator to export live settings/GPU/cadence information.
+See [pattern rendering diagnostics](docs/pattern-rendering-diagnostics.md) for
+temporal smoothing, hybrid GPU routing, VSync limitations and driver checks.
+
 ### Bounded hardware smoke test
 
 On 2026-09-26, one Basler `a2A2448-23gmBAS` (`BaslerGigE`) was smoke tested on Windows with pylon Runtime `12.2.0.1265` and pypylon `26.6`. Exact-descriptor discovery/opening, native `Mono8` acquisition, a harmless temporary `ExposureTime` readback, rollback, GUI live preview, Structure Tensor processing, local raw recording, reload, and Farneback replay passed. The final bounded raw run received 61 frames in 10.164 s (6.001 FPS), with 0 timeouts and 0 grab errors; BlockID and camera timestamp were monotonic. The local frames/session were not committed.

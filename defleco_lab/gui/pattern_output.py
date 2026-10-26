@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import json
 import math
+from collections import deque
 from dataclasses import asdict, dataclass, replace
+from pathlib import Path
+from time import perf_counter
 
 import numpy as np
 from PySide6 import QtCore, QtGui, QtOpenGL, QtWidgets
 
+from .pattern_motion import frame_motion_samples
 from .pattern_shader import PatternShader
 
 
@@ -25,6 +30,7 @@ class PatternSettings:
     phase_speed_cycles_s: float = 0.0
     breathing_depth_percent: float = 0.0
     breathing_hz: float = 0.5
+    motion_smoothing: bool = True
     step_deg: float = 15.0
     step_target: str = "angle"
     center_x_percent: float = 0.0
@@ -176,6 +182,7 @@ class PatternOutputWindow(QtOpenGL.QOpenGLWindow):
 
     stateChanged = QtCore.Signal(object)
     renderFailed = QtCore.Signal(str)
+    graphicsInfoChanged = QtCore.Signal(object)
 
     def __init__(self) -> None:
         super().__init__()
@@ -186,6 +193,12 @@ class PatternOutputWindow(QtOpenGL.QOpenGLWindow):
         fmt.setSwapInterval(1)
         fmt.setDepthBufferSize(0)
         fmt.setStencilBufferSize(0)
+        fmt.setRedBufferSize(8)
+        fmt.setGreenBufferSize(8)
+        fmt.setBlueBufferSize(8)
+        fmt.setAlphaBufferSize(0)
+        fmt.setSamples(0)
+        fmt.setOption(QtGui.QSurfaceFormat.FormatOption.ResetNotification)
         self.setFormat(fmt)
         self.setTitle("Defleco LAB - Pattern Output")
         self.setFlag(QtCore.Qt.WindowType.FramelessWindowHint, True)
@@ -199,7 +212,32 @@ class PatternOutputWindow(QtOpenGL.QOpenGLWindow):
         self._settings_revision = 0
         self._painted_revision = -1
         self._presented_revision = -1
+        self._last_motion_samples: tuple[PatternSettings, ...] = ()
+        self._graphics_info: dict = {}
+        self._swap_times: deque[float] = deque(maxlen=241)
         self.frameSwapped.connect(self._frame_swapped)
+
+    def display_diagnostics(self) -> dict:
+        intervals = np.diff(self._swap_times) * 1000.0
+        screen = self.screen()
+        return {
+            "settings": self._settings.as_dict(),
+            "last_submitted_settings": self.effective_settings.as_dict(),
+            "temporal_samples": len(self._last_motion_samples) or 1,
+            "graphics": self._graphics_info,
+            "screen": screen.name() if screen else None,
+            "physical_size": [round(self.width() * self.devicePixelRatio()),
+                              round(self.height() * self.devicePixelRatio())],
+            "refresh_hz_reported": screen.refreshRate() if screen else None,
+            "swap_intervals_ms": {
+                "count": len(intervals),
+                "median": float(np.median(intervals)) if len(intervals) else None,
+                "p95": float(np.percentile(intervals, 95)) if len(intervals) else None,
+                "maximum": float(np.max(intervals)) if len(intervals) else None,
+            },
+            "render_error": self._render_error,
+            "scanout_verified": False,
+        }
 
     @property
     def has_presented_frame(self) -> bool:
@@ -297,6 +335,8 @@ class PatternOutputWindow(QtOpenGL.QOpenGLWindow):
         self.stateChanged.emit(self.effective_settings)
 
     def exposeEvent(self, event: QtGui.QExposeEvent) -> None:
+        self._presented_revision = -1
+        self._swap_times.clear()
         self._elapsed.invalidate()
         if self.isExposed() and self._settings.mode == "continuous":
             self._elapsed.start()
@@ -313,6 +353,19 @@ class PatternOutputWindow(QtOpenGL.QOpenGLWindow):
         try:
             self._shader.initialize(self.context())
             self._render_error = ""
+            gl = self.context().functions()
+            fmt = self.context().format()
+            self._graphics_info = {
+                "vendor": gl.glGetString(0x1F00),
+                "renderer": gl.glGetString(0x1F01),
+                "version": gl.glGetString(0x1F02),
+                "qt_version": QtCore.qVersion(),
+                "requested_swap_interval": self.format().swapInterval(),
+                "context_swap_interval": fmt.swapInterval(),
+                "swap_behavior": str(fmt.swapBehavior()),
+                "vsync_note": "Requested/read back; physical scanout is not verified.",
+            }
+            self.graphicsInfoChanged.emit(self._graphics_info)
             self.context().aboutToBeDestroyed.connect(self._release_gl)
         except RuntimeError as exc:
             self._render_error = str(exc)
@@ -324,6 +377,10 @@ class PatternOutputWindow(QtOpenGL.QOpenGLWindow):
         self.doneCurrent()
 
     def paintGL(self) -> None:
+        if not self.context() or not self.context().isValid():
+            self._render_error = "Graphics context was lost; reopen pattern output."
+            self.renderFailed.emit(self._render_error)
+            return
         if self._render_error:
             functions = self.context().functions()
             functions.glClearColor(0.0, 0.0, 0.0, 1.0)
@@ -337,8 +394,14 @@ class PatternOutputWindow(QtOpenGL.QOpenGLWindow):
         # display pixels. No intermediate low-resolution image or CPU scaling.
         dpr = self.devicePixelRatio()
         width, height = round(self.width() * dpr), round(self.height() * dpr)
+        screen = self.screen()
+        self._last_motion_samples = frame_motion_samples(
+            self._settings, self._effective_angle, self._effective_phase,
+            self._breathing_phase, screen.refreshRate() if screen else 60.0,
+        )
         try:
-            self._shader.draw(self.effective_settings, width, height)
+            self._shader.draw(self.effective_settings, width, height,
+                              motion_samples=self._last_motion_samples)
         except RuntimeError as exc:
             self._render_error = str(exc)
             self.renderFailed.emit(self._render_error)
@@ -348,6 +411,7 @@ class PatternOutputWindow(QtOpenGL.QOpenGLWindow):
 
     def _frame_swapped(self) -> None:
         if self.isExposed() and not self._render_error:
+            self._swap_times.append(perf_counter())
             self._presented_revision = self._painted_revision
         if self.isExposed() and self._settings.mode == "continuous" and not self._render_error:
             self.update()
@@ -561,6 +625,14 @@ class PatternControlPanel(QtWidgets.QGroupBox):
         self.breathing_hz.setSuffix(" Hz")
         self.breathing_hz.setToolTip("Frequency of period pulsing/breathing.")
 
+        self.motion_smoothing = QtWidgets.QCheckBox("Smooth movement over one display frame")
+        self.motion_smoothing.setChecked(True)
+        self.motion_smoothing.setToolTip(
+            "Reduces strobing of fine moving patterns by averaging 4 temporal samples. "
+            "Moving edges become softer. Static and stepped patterns stay sharp. "
+            "Disable for instantaneous sharp-frame comparisons."
+        )
+
         self.step_size = QtWidgets.QDoubleSpinBox()
         self.step_size.setRange(0.1, 180.0)
         self.step_size.setValue(15.0)
@@ -590,6 +662,8 @@ class PatternControlPanel(QtWidgets.QGroupBox):
         buttons.addWidget(self.show_button)
         buttons.addWidget(self.hide_button)
         buttons.addWidget(self.step_button)
+        self.diagnostics_button = QtWidgets.QPushButton("Save display diagnostics")
+        self.diagnostics_button.clicked.connect(self._save_diagnostics)
 
         form.addRow("Pattern", self.family)
         form.addRow("Period / fineness", self.period)
@@ -614,6 +688,7 @@ class PatternControlPanel(QtWidgets.QGroupBox):
         form.addRow("Phase sweep", self.phase_speed)
         form.addRow("Period breathing", self.breathing_depth)
         form.addRow("Breathing frequency", self.breathing_hz)
+        form.addRow(self.motion_smoothing)
         form.addRow("Step target", self.step_target)
         form.addRow("Step", self.step_size)
         self.render_status = QtWidgets.QLabel(
@@ -622,8 +697,10 @@ class PatternControlPanel(QtWidgets.QGroupBox):
         self.render_status.setWordWrap(True)
         form.addRow(self.render_status)
         self.output.renderFailed.connect(self._render_failed)
+        self.output.graphicsInfoChanged.connect(self._graphics_changed)
         form.addRow("Output display", self.screen)
         form.addRow(buttons)
+        form.addRow(self.diagnostics_button)
 
         for widget in (
             self.family,
@@ -649,6 +726,7 @@ class PatternControlPanel(QtWidgets.QGroupBox):
             self.phase_speed,
             self.breathing_depth,
             self.breathing_hz,
+            self.motion_smoothing,
             self.step_target,
             self.step_size,
         ):
@@ -662,6 +740,25 @@ class PatternControlPanel(QtWidgets.QGroupBox):
     def _render_failed(self, message: str) -> None:
         self.render_status.setText("Pattern output unavailable: " + message)
         self.output.hide_output()
+
+    def _graphics_changed(self, info: dict) -> None:
+        self.render_status.setText(
+            f"{info.get('renderer', 'GPU')}; VSync requested "
+            f"(context interval {info.get('context_swap_interval')}). "
+            "Physical display synchronization is not verified."
+        )
+
+    def _save_diagnostics(self) -> None:
+        filename, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Save display diagnostics", "pattern-display-diagnostics.json", "JSON (*.json)"
+        )
+        if filename:
+            try:
+                Path(filename).write_text(
+                    json.dumps(self.output.display_diagnostics(), indent=2), encoding="utf-8"
+                )
+            except OSError as exc:
+                self.render_status.setText(f"Could not save diagnostics: {exc}")
 
     def refresh_screens(self) -> None:
         current = self.screen.currentData() if hasattr(self, "screen") else None
@@ -715,6 +812,7 @@ class PatternControlPanel(QtWidgets.QGroupBox):
             phase_speed_cycles_s=self.phase_speed.value(),
             breathing_depth_percent=self.breathing_depth.value(),
             breathing_hz=self.breathing_hz.value(),
+            motion_smoothing=self.motion_smoothing.isChecked(),
             step_deg=self.step_size.value(),
             step_target=str(self.step_target.currentData()),
             center_x_percent=self.center_x.value(),
@@ -794,6 +892,7 @@ class PatternControlPanel(QtWidgets.QGroupBox):
             self.phase_speed: continuous,
             self.breathing_depth: continuous,
             self.breathing_hz: continuous and self.breathing_depth.value() > 0,
+            self.motion_smoothing: continuous,
             self.step_target: stepped and family != "rings",
             self.step_size: stepped,
         }

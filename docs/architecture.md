@@ -68,6 +68,19 @@ Binary patterns use subpixel edge coverage; angular patterns use analytic
 derivatives to avoid a false seam at the atan branch boundary. Rotation is
 360-degree periodic; starburst phase is 720-degree periodic.
 
+Affine stripe/checker/composite coverage uses analytic spatial gradients, and
+orientation sine/cosine coefficients are computed once on the CPU. This avoids
+observed Intel edge differences from GPU derivatives/trigonometric approximations.
+The renderer resets clipping, stencil, culling, color writes and raster discard,
+clears the full target, and checks current-context ownership, binding and GL errors.
+
+Continuous motion optionally integrates four midpoint states over the preceding
+reported display refresh interval. Sampling uses the original base period and
+rotation/phase/breathing timeline; a missed frame does not extend the integration
+window or accumulate old frames. Signals are averaged before Mono8 quantization.
+Static/stepped cases bypass this filter. The last submitted temporal states are
+available to the explicit artifact diagnostic for independent pixel verification.
+
 The display driver/compositor ultimately controls scanout. A completed swap is a
 software presentation boundary, not proof of optical settling or synchronized
 camera exposure. The earlier standalone dynamic-pattern PoC remains the design

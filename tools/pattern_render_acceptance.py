@@ -70,6 +70,35 @@ def gpu_acceptance() -> dict:
     image = framebuffer.toImage().convertToFormat(QtGui.QImage.Format.Format_RGBA8888)
     coverage = np.frombuffer(image.constBits(), np.uint8).reshape(173, 241, 4)[:, :, 0]
     assert np.any((coverage > 0) & (coverage < 255)), "Missing subpixel edge coverage"
+    # Poison caller GL state and the old contents. The draw must own all state
+    # needed to overwrite the complete framebuffer, rather than leave stale tiles.
+    gl = context.functions()
+    gl.glClearColor(0.3, 0.4, 0.7, 1)
+    gl.glClear(0x00004000)
+    gl.glEnable(0x0C11)  # SCISSOR_TEST
+    gl.glScissor(0, 0, 16, 16)
+    gl.glColorMask(False, False, False, False)
+    gl.glEnable(0x0B44)  # CULL_FACE
+    gl.glCullFace(0x0404)  # FRONT
+    gl.glEnable(0x8C89)  # RASTERIZER_DISCARD
+    shader.draw(settings, 241, 173, antialias=False)
+    image = framebuffer.toImage().convertToFormat(QtGui.QImage.Format.Format_RGBA8888)
+    actual = np.frombuffer(image.constBits(), np.uint8).reshape(173, 241, 4)[:, :, 0]
+    assert np.max(np.abs(actual.astype(int) - render_pattern(241, 173, settings))) <= 1
+
+    temporal_comparisons = []
+    for family in families:
+        settings = PatternSettings(family=family, phase_deg=11.3, angle_deg=13.7)
+        samples = tuple(replace(settings, angle_deg=13.7 + i * 0.3,
+                                phase_deg=11.3 + i * 2, period_px=50 + i * 0.15)
+                        for i in range(8))
+        shader.draw(settings, 241, 173, antialias=False, motion_samples=samples)
+        image = framebuffer.toImage().convertToFormat(QtGui.QImage.Format.Format_RGBA8888)
+        actual = np.frombuffer(image.constBits(), np.uint8).reshape(173, 241, 4)[:, :, 0]
+        expected = np.rint(np.mean([render_pattern(241, 173, s) for s in samples], axis=0))
+        fraction = float(np.mean(np.abs(actual.astype(float) - expected) <= 1))
+        temporal_comparisons.append({"family": family, "within_one": fraction})
+        assert fraction >= 0.999, temporal_comparisons[-1]
     seam_errors = {}
     for family in ("spiral", "counter_spiral", "starburst"):
         settings = PatternSettings(family=family, period_px=27.3, spiral_arms=3, spokes=17)
@@ -107,7 +136,9 @@ def gpu_acceptance() -> dict:
     del framebuffer
     shader.close()
     context.doneCurrent()
-    return {"comparisons": comparisons, "aa_seam_mean_error": seam_errors, "gpu_2160x3840": benchmarks}
+    return {"comparisons": comparisons, "temporal_comparisons": temporal_comparisons,
+            "gl_state_recovery": "passed", "aa_seam_mean_error": seam_errors,
+            "gpu_2160x3840": benchmarks}
 
 
 def onscreen_acceptance(app: QtWidgets.QApplication, screen: int) -> dict:
