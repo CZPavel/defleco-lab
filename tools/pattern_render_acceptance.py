@@ -17,11 +17,95 @@ from PySide6 import QtCore, QtGui, QtOpenGL, QtWidgets
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from defleco_lab.gui.pattern_output import PatternOutputWindow, PatternSettings, render_pattern
+from defleco_lab.gui.pattern_output import (
+    PatternOutputWindow,
+    PatternSettings,
+    render_pattern,
+    render_pattern_rgb,
+)
 from defleco_lab.gui.pattern_shader import PatternShader
+from tools.pattern_artifact_diagnostics import errors, identity, raw_reference, read_pixels_rgb
 
 
-def gpu_acceptance() -> dict:
+def rgb_comparisons(shader: PatternShader, context: QtGui.QOpenGLContext) -> dict:
+    """Exercise RGB framebuffer channels, including cached speckle appearance edits."""
+    width, height = 241, 173
+    comparisons, temporal = [], []
+    families = ("stripes", "checker", "rings", "composite", "nested_square", "squircle",
+                "spiral", "counter_spiral", "starburst", "speckle", "solid")
+    for family in families:
+        for waveform, invert, brightness in (("binary", False, 100),
+                                              ("sinusoidal", True, 73),
+                                              ("binary", True, 0)):
+            settings = PatternSettings(
+                family=family, waveform=waveform, invert=invert, brightness=brightness,
+                dark_color=(18, 79, 143), light_color=(231, 158, 32),
+                angle_deg=213.7, phase_deg=71.3, period_px=27.3,
+                phase_tilt_x_deg=34, phase_tilt_y_deg=-67,
+                center_x_percent=13, center_y_percent=-7, spokes=17, spiral_arms=3,
+            )
+            shader.draw(settings, width, height, antialias=False)
+            actual = read_pixels_rgb(context, width, height)
+            expected = render_pattern_rgb(width, height, settings)
+            delta = np.abs(actual.astype(int) - expected.astype(int))
+            within_one = float(np.mean(np.all(delta <= 1, axis=2)))
+            row = {"family": family, "waveform": waveform, "invert": invert,
+                       "brightness": brightness, "within_one": within_one, "max_error": int(delta.max())}
+            comparisons.append(row)
+            assert within_one >= 0.999, row
+        # A color edit after a cached speckle draw must update every channel.
+        settings = replace(settings, brightness=100, invert=False,
+                           dark_color=(44, 151, 23), light_color=(219, 33, 190))
+        samples = tuple(replace(settings, angle_deg=213.7 + i * 0.3,
+                                phase_deg=71.3 + i * 2, period_px=27.3 + i * 0.15)
+                        for i in range(8))
+        shader.draw(settings, width, height, antialias=False, motion_samples=samples)
+        actual = read_pixels_rgb(context, width, height)
+        # Binary signals with 0/255 endpoints avoid premature rounding in this
+        # independent reference for averaging before color mapping.
+        raw = [render_pattern(width, height, replace(sample, brightness=100)) / 255.0
+               for sample in samples]
+        signal = np.mean(raw, axis=0)
+        dark, light = np.array(settings.dark_color), np.array(settings.light_color)
+        expected = np.rint(dark + (light-dark) * signal[:, :, None])
+        delta = np.abs(actual.astype(float) - expected)
+        row = {"family": family, "within_one": float(np.mean(np.all(delta <= 1, axis=2))),
+                   "max_error": float(delta.max())}
+        temporal.append(row)
+        assert row["within_one"] >= 0.999, row
+        # Default palette must remain three identical copies of Mono8.
+        default = replace(settings, dark_color=(0, 0, 0), light_color=(255, 255, 255),
+                          brightness=73, invert=True)
+        shader.draw(default, width, height, antialias=False)
+        actual = read_pixels_rgb(context, width, height)
+        assert np.array_equal(actual[:, :, 0], actual[:, :, 1])
+        assert np.array_equal(actual[:, :, 0], actual[:, :, 2])
+        delta = np.abs(actual.astype(int) - render_pattern(width, height, default)[:, :, None])
+        assert np.mean(np.all(delta <= 1, axis=2)) >= 0.999, family
+    # Compare colored temporal AA against the independent analytic stripe
+    # coverage reference, rather than an already-quantized Mono8 frame.
+    settings = PatternSettings(
+        family="stripes", period_px=27.3, angle_deg=31.7, phase_deg=71.3,
+        brightness=73, invert=True, dark_color=(18, 79, 143), light_color=(231, 158, 32),
+    )
+    samples = tuple(replace(settings, angle_deg=31.7 + i * 0.3,
+                            phase_deg=71.3 + i * 2, period_px=27.3 + i * 0.15)
+                    for i in range(8))
+    shader.draw(settings, width, height, motion_samples=samples)
+    actual = read_pixels_rgb(context, width, height)
+    signal = np.mean([raw_reference(width, height, sample) / 186 for sample in samples], axis=0)
+    dark, light = np.array(settings.dark_color), np.array(settings.light_color)
+    expected = np.rint((dark + (light-dark) * signal[:, :, None]) * (186/255))
+    delta = np.abs(actual.astype(float) - expected)
+    aa = {"max_error": float(delta.max()), "mean_error": float(delta.mean())}
+    assert delta.max() <= 1, aa
+    gl_errors = errors(context)
+    assert not gl_errors, gl_errors
+    return {"rgb_comparisons": comparisons, "rgb_temporal_comparisons": temporal,
+            "rgb_temporal_antialias": aa, "rgb_gl_errors": gl_errors}
+
+
+def gpu_acceptance(rgb_only: bool = False) -> dict:
     fmt = QtGui.QSurfaceFormat()
     fmt.setVersion(3, 3)
     fmt.setProfile(QtGui.QSurfaceFormat.OpenGLContextProfile.CoreProfile)
@@ -40,6 +124,14 @@ def gpu_acceptance() -> dict:
     framebuffer = QtOpenGL.QOpenGLFramebufferObject(241, 173)
     assert framebuffer.isValid()
     framebuffer.bind()
+    rgb = rgb_comparisons(shader, context)
+    if rgb_only:
+        report = {"graphics": identity(context), **rgb}
+        framebuffer.release()
+        del framebuffer
+        shader.close()
+        context.doneCurrent()
+        return report
     families = (
         "stripes", "checker", "rings", "composite", "nested_square", "squircle",
         "spiral", "counter_spiral", "starburst", "speckle", "solid",
@@ -136,7 +228,7 @@ def gpu_acceptance() -> dict:
     del framebuffer
     shader.close()
     context.doneCurrent()
-    return {"comparisons": comparisons, "temporal_comparisons": temporal_comparisons,
+    return {**rgb, "comparisons": comparisons, "temporal_comparisons": temporal_comparisons,
             "gl_state_recovery": "passed", "aa_seam_mean_error": seam_errors,
             "gpu_2160x3840": benchmarks}
 
@@ -188,10 +280,12 @@ def onscreen_acceptance(app: QtWidgets.QApplication, screen: int) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--screen", type=int)
+    parser.add_argument("--rgb-only", action="store_true",
+                        help="Run bounded RGB checks without the unrelated 4K benchmark")
     args = parser.parse_args()
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     app.setQuitOnLastWindowClosed(False)
-    report = gpu_acceptance()
+    report = gpu_acceptance(rgb_only=args.rgb_only)
     if args.screen is not None:
         report["onscreen"] = onscreen_acceptance(app, args.screen)
     print(json.dumps(report, indent=2))

@@ -129,6 +129,14 @@ diagnostics** in Pattern generator to export live settings/GPU/cadence informati
 See [pattern rendering diagnostics](docs/pattern-rendering-diagnostics.md) for
 temporal smoothing, hybrid GPU routing, VSync limitations and driver checks.
 
+Pattern generator supports independent **Light color** / **Dark color** RGB888
+endpoints with a palette, custom RGB/hex dialog, Swap and Reset Black / White.
+The last pair is remembered. Colours update the existing fullscreen GPU surface;
+the original Mono8 reference API and default black/white output are preserved.
+Screening uses its original recipes unless **Use selected pattern colours** is
+explicitly enabled. Each captured pattern state records its colours in the manifest.
+See the [operator guide](docs/operator-guide.md#pattern-generator) for usage.
+
 The current 65-inch TV PoC intentionally operates at **1080x1920 portrait / 60 Hz**.
 Period is specified in framebuffer pixels before the TV's scaling. For the
 operator-declared 2160x3840 native panel, the ideal scale is 2x, so a 50 px
