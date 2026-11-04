@@ -545,7 +545,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # Widths are preferences, not minimums. Docks remain resizable/collapsible.
         self.resizeDocks(
             [self.input_dock, self.analysis_dock],
-            [330, 360],
+            [380, 360],
             QtCore.Qt.Orientation.Horizontal,
         )
         self.input_dock.raise_()
@@ -779,7 +779,11 @@ class MainWindow(QtWidgets.QMainWindow):
         (root / "raw").mkdir()
 
         self._experiment_profile = str(config.get("profile", "quick"))
-        self._experiment_cases = build_pattern_cases(self._experiment_profile)
+        color_override = None
+        if config.get("use_pattern_colors", False):
+            settings = self.pattern_output.settings()
+            color_override = (settings.dark_color, settings.light_color)
+        self._experiment_cases = build_pattern_cases(self._experiment_profile, color_override)
         self._experiment_records = []
         self._experiment_index = -1
         self._experiment_root = root

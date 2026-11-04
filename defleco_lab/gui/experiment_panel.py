@@ -65,6 +65,12 @@ class ExperimentPanel(QtWidgets.QGroupBox):
             "and export grayscale/colour plus 50% overlay variants."
         )
 
+        self.use_pattern_colors = QtWidgets.QCheckBox("Use selected pattern colours")
+        self.use_pattern_colors.setToolTip(
+            "Apply the dark and light colours selected in the pattern controls to every "
+            "screening case. Leave unchecked for the standard screening recipes."
+        )
+
         self.start_capture = QtWidgets.QPushButton("Run pattern capture sweep")
         self.start_capture.setToolTip(
             "Requires Basler Live acquisition. The app switches to Original view during capture."
@@ -107,6 +113,7 @@ class ExperimentPanel(QtWidgets.QGroupBox):
         form.addRow("Pattern cases", self.case_count)
         form.addRow("Settle time", self.settle_ms)
         form.addRow("Experiment parent", root_row)
+        form.addRow(self.use_pattern_colors)
         form.addRow(self.auto_process)
         form.addRow(buttons)
         form.addRow(self.progress)
@@ -119,6 +126,7 @@ class ExperimentPanel(QtWidgets.QGroupBox):
             "settle_ms": int(self.settle_ms.value()),
             "parent": self.root.text().strip(),
             "auto_process": self.auto_process.isChecked(),
+            "use_pattern_colors": self.use_pattern_colors.isChecked(),
         }
 
     def set_running(self, running: bool) -> None:

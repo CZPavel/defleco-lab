@@ -96,6 +96,18 @@ Modes / dynamics:
 
 Esc closes the full-screen pattern output.
 
+**Light color** and **Dark color** independently select the RGB888 endpoints of
+the pattern signal. Each row has a preview, a 14-colour palette and **Custom…**,
+which opens the standard colour dialog for graphical, RGB or hex input.
+**Swap colors** exchanges the stored endpoints; **Reset Black / White** restores
+the defaults. **Invert color mapping** reverses the signal without changing the
+stored colours. A solid field uses Light (Dark when inverted). Sinusoidal patterns
+interpolate smoothly between the endpoints. Brightness scales all output channels
+using the established digital peak; it is not a calibrated luminance setting.
+Colour changes update the active fullscreen surface immediately. Only the last
+colour pair is saved between application launches; other controls are unaffected.
+The default black/white pair preserves Mono8 processing and reference behaviour.
+
 Pattern output uses native physical display pixels and follows the display's
 refresh cadence. The previous render-quality and software-FPS controls have been
 removed: lowering resolution is no longer needed for continuous output. Binary
@@ -198,6 +210,11 @@ every possible parameter.
 3. Open **Screening experiment** and choose a parent folder.
 4. Keep the default settling delay for the first run.
 5. Start **Run pattern capture sweep**.
+
+To experiment with colour, select the dark and light colours in the pattern controls
+and enable **Use selected pattern colours** in the screening panel before starting.
+The pair is applied to every case and recorded in the capture manifest. Leave the
+option off to retain the standard screening colours.
 
 The application then:
 

@@ -85,14 +85,20 @@ def reference(width: int, height: int, settings: PatternSettings,
     return np.rint(total / len(samples)).astype(np.uint8)
 
 
-def read_pixels(context: QtGui.QOpenGLContext, width: int, height: int) -> np.ndarray:
+def read_pixels_rgb(context: QtGui.QOpenGLContext, width: int, height: int) -> np.ndarray:
+    """Read all three framebuffer channels, top-origin, without RGB row-padding risks."""
     global _READ_PIXELS
     if _READ_PIXELS is None:
         _READ_PIXELS = native_read_pixels()
     pixels = np.empty((height, width, 4), dtype=np.uint8)
     _READ_PIXELS(0, 0, width, height, 0x1908, 0x1401,
                  pixels.ctypes.data)  # RGBA / UNSIGNED_BYTE
-    return pixels[::-1, :, 0].copy()
+    return pixels[::-1, :, :3].copy()
+
+
+def read_pixels(context: QtGui.QOpenGLContext, width: int, height: int) -> np.ndarray:
+    """Compatibility Mono8 diagnostics: inspect the red channel."""
+    return read_pixels_rgb(context, width, height)[:, :, 0].copy()
 
 
 def errors(context: QtGui.QOpenGLContext) -> list[int]:

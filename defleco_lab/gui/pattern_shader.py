@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from PySide6 import QtGui, QtOpenGL
@@ -31,6 +32,8 @@ uniform float spiralWidth;
 uniform float arms;
 uniform float spokes;
 uniform float peak;
+uniform vec3 darkRGB;
+uniform vec3 lightRGB;
 uniform int family;
 uniform bool sinusoidal;
 uniform bool inverted;
@@ -126,14 +129,11 @@ float evaluateSignal(vec2 xy, vec4 state, float sampleAngle) {
 void main() {
     vec2 pixel = vec2(gl_FragCoord.x - 0.5,
                       dimensions.y - gl_FragCoord.y - 0.5);
-    if (family == 9) {
-        float value = texture(speckle, (pixel + 0.5) / dimensions).r;
-        color = vec4(value, value, value, 1.0);
-        return;
-    }
     vec2 xy = pixel - (dimensions - 1.0) * 0.5 - dimensions * centerShift;
     float signal;
-    if (family == 10) {
+    if (family == 9) {
+        signal = texture(speckle, (pixel + 0.5) / dimensions).r;
+    } else if (family == 10) {
         signal = 1.0;
     } else if (motionCount == 0) {
         signal = evaluateSignal(xy, vec4(orientation, phase, period), angle);
@@ -145,8 +145,13 @@ void main() {
         signal /= float(motionCount);
     }
     if (inverted) signal = 1.0 - signal;
-    float value = roundEven(clamp(signal * peak, 0.0, 255.0)) / 255.0;
-    color = vec4(value, value, value, 1.0);
+    vec3 rgb;
+    if (all(equal(darkRGB, vec3(0.0))) && all(equal(lightRGB, vec3(255.0)))) {
+        rgb = vec3(signal * peak); // Preserve the established B/W rounding exactly.
+    } else {
+        rgb = mix(darkRGB, lightRGB, signal) * (peak / 255.0);
+    }
+    color = vec4(roundEven(clamp(rgb, vec3(0.0), vec3(255.0))) / 255.0, 1.0);
 }
 """
 
@@ -190,6 +195,7 @@ class PatternShader:
             for name in (
                 "dimensions", "centerShift", "tilt", "period", "angle", "phase",
                 "duty", "powerValue", "spiralWidth", "arms", "spokes", "peak",
+                "darkRGB", "lightRGB",
                 "family", "sinusoidal", "inverted", "antialias", "speckle", "motionCount", "orientation",
                 *(f"motionStates[{index}]" for index in range(8)),
             )
@@ -207,7 +213,7 @@ class PatternShader:
         """Draw physical pixels, optionally averaging up to eight temporal states.
 
         Samples replace the instantaneous state and may vary only angle, phase,
-        and period; their unquantized signals are averaged before Mono8 rounding.
+        and period; their unquantized signals are averaged before RGB mapping and rounding.
         Speckle and solid remain static regardless of supplied temporal samples.
         """
         if self._program is None or self._vao is None or self._context is None:
@@ -220,7 +226,7 @@ class PatternShader:
             "family", "waveform", "center_x_percent", "center_y_percent",
             "phase_tilt_x_deg", "phase_tilt_y_deg", "duty_percent", "squircle_power",
             "spiral_width_percent", "spiral_arms", "spokes", "brightness", "invert",
-            "speckle_size_px", "seed",
+            "speckle_size_px", "seed", "dark_color", "light_color",
         )
         for sample in motion_samples:
             if any(getattr(sample, name) != getattr(settings, name) for name in fixed_fields):
@@ -229,12 +235,12 @@ class PatternShader:
             motion_samples = ()
         width, height = max(2, int(width)), max(2, int(height))
         if settings.family == "speckle":
-            key = (width, height, settings)
+            key = (width, height, settings.speckle_size_px, settings.seed)
             if key != self._speckle_key:
-                # Preserve numpy's established seeded RNG and Mono8 rounding.
+                # Preserve numpy's established binary RNG; appearance is applied below.
                 from .pattern_output import render_pattern
 
-                frame = render_pattern(width, height, settings)
+                frame = render_pattern(width, height, replace(settings, brightness=100, invert=False))
                 image = QtGui.QImage(frame.data, width, height, frame.strides[0],
                                      QtGui.QImage.Format.Format_Grayscale8).copy()
                 if self._texture is not None:
@@ -278,6 +284,8 @@ class PatternShader:
             "arms": float(max(1, int(settings.spiral_arms))),
             "spokes": float(max(2, int(settings.spokes))),
             "peak": float(round(min(100.0, max(0.0, settings.brightness)) * 255 / 100)),
+            "darkRGB": QtGui.QVector3D(*settings.dark_color),
+            "lightRGB": QtGui.QVector3D(*settings.light_color),
             "family": _FAMILIES.get(settings.family, 0),
             "sinusoidal": settings.waveform == "sinusoidal",
             "inverted": settings.invert,
@@ -294,7 +302,7 @@ class PatternShader:
             uniforms[f"motionAngles[{index}]"] = math.radians(sample.angle_deg)
         for name, value in uniforms.items():
             location = self._uniform_locations[name]
-            if isinstance(value, (QtGui.QVector2D, QtGui.QVector4D)):
+            if isinstance(value, (QtGui.QVector2D, QtGui.QVector3D, QtGui.QVector4D)):
                 program.setUniformValue(location, value)
             elif isinstance(value, (bool, int)):
                 program.setUniformValue1i(location, int(value))

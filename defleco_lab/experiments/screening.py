@@ -5,7 +5,7 @@ from __future__ import annotations
 import html
 import json
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -52,7 +52,10 @@ class AnalysisRecipe:
         return asdict(self)
 
 
-def build_pattern_cases(profile: str = "quick") -> list[PatternCase]:
+def build_pattern_cases(
+    profile: str = "quick",
+    color_override: tuple[tuple[int, int, int], tuple[int, int, int]] | None = None,
+) -> list[PatternCase]:
     """Build a bounded, interpretable screening set rather than a Cartesian explosion."""
 
     if profile == "extended":
@@ -111,6 +114,14 @@ def build_pattern_cases(profile: str = "quick") -> list[PatternCase]:
                 settings=PatternSettings(family="solid", mode="static"),
             )
         )
+    if color_override is not None:
+        dark_color, light_color = color_override
+        cases = [
+            replace(case, settings=replace(
+                case.settings, dark_color=dark_color, light_color=light_color
+            ))
+            for case in cases
+        ]
     return cases
 
 

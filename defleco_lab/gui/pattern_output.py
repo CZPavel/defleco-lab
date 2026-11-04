@@ -52,6 +52,18 @@ class PatternSettings:
     spokes: int = 18
     speckle_size_px: int = 24
     seed: int = 12345
+    dark_color: tuple[int, int, int] = (0, 0, 0)
+    light_color: tuple[int, int, int] = (255, 255, 255)
+
+    def __post_init__(self) -> None:
+        # JSON manifests use lists; normalize them to the same immutable RGB888 type.
+        for name in ("dark_color", "light_color"):
+            value = getattr(self, name)
+            if (not isinstance(value, (tuple, list)) or len(value) != 3
+                    or any(type(channel) is not int or not 0 <= channel <= 255
+                           for channel in value)):
+                raise ValueError(f"{name} must contain three integer RGB channels in 0..255")
+            object.__setattr__(self, name, tuple(value))
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -64,6 +76,28 @@ def render_pattern(width: int, height: int, settings: PatternSettings) -> np.nda
     standalone GPixel Deflecto dynamic-pattern PoC where practical.
     """
 
+    signal = _pattern_signal(width, height, settings)
+    peak = round(np.clip(float(settings.brightness), 0.0, 100.0) * 255.0 / 100.0)
+    return np.rint(np.clip(signal * peak, 0, 255)).astype(np.uint8)
+
+
+def render_pattern_rgb(width: int, height: int, settings: PatternSettings) -> np.ndarray:
+    """Explicit RGB888 reference; Mono8 callers retain their original interface.
+
+    Use the unquantized signal, then map colors and apply the established digital
+    brightness peak. The GPU performs this mapping with uniforms each frame.
+    """
+    signal = _pattern_signal(width, height, settings)[..., None]
+    dark = np.asarray(settings.dark_color, dtype=np.float32)
+    light = np.asarray(settings.light_color, dtype=np.float32)
+    peak = round(np.clip(float(settings.brightness), 0.0, 100.0) * 255.0 / 100.0)
+    # Multiplying by a normalized endpoint preserves the old signal*peak order.
+    mapped = dark / 255.0 + (light - dark) / 255.0 * signal
+    return np.rint(np.clip(mapped * peak, 0, 255)).astype(np.uint8)
+
+
+def _pattern_signal(width: int, height: int, settings: PatternSettings) -> np.ndarray:
+    """Established carrier mathematics, shared by Mono8 and RGB references."""
     width = max(2, int(width))
     height = max(2, int(height))
     period = max(2.0, float(settings.period_px))
@@ -166,8 +200,7 @@ def render_pattern(width: int, height: int, settings: PatternSettings) -> np.nda
 
     if settings.invert:
         signal = 1.0 - signal
-    peak = round(np.clip(float(settings.brightness), 0.0, 100.0) * 255.0 / 100.0)
-    return np.rint(np.clip(signal * peak, 0, 255)).astype(np.uint8)
+    return signal
 
 
 def _carrier(cycles: np.ndarray, waveform: str, duty: float) -> np.ndarray:
@@ -181,6 +214,82 @@ def _line_carrier(cycles: np.ndarray, width_fraction: float) -> np.ndarray:
     distance = np.minimum(phase, 1.0 - phase)
     return (distance <= width_fraction * 0.5).astype(np.float32)
 
+
+
+class PatternColorControl(QtWidgets.QWidget):
+    """Compact palette, opaque preview and the standard RGB/hex color dialog."""
+
+    colorChanged = QtCore.Signal()
+    PALETTE = (
+        ("Black", "#000000"), ("White", "#ffffff"), ("Dark gray", "#404040"),
+        ("Gray", "#808080"), ("Red", "#ff0000"), ("Green", "#008000"),
+        ("Blue", "#0000ff"), ("Cyan", "#00ffff"), ("Magenta", "#ff00ff"),
+        ("Yellow", "#ffff00"), ("Orange", "#ffa500"), ("Purple", "#800080"),
+        ("Navy", "#000080"), ("Lime", "#00ff00"),
+    )
+
+    def __init__(self, color: QtGui.QColor, parent=None, title: str = "") -> None:
+        super().__init__(parent)
+        self._color = QtGui.QColor(color)
+        layout = QtWidgets.QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+        if title:
+            layout.addWidget(QtWidgets.QLabel(title))
+        self.preview = QtWidgets.QLabel()
+        self.preview.setFixedSize(24, 24)
+        self.palette = QtWidgets.QComboBox()
+        self.palette.setMinimumContentsLength(5)
+        self.palette.setSizeAdjustPolicy(
+            QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        for name, hex_color in self.PALETTE:
+            pixmap = QtGui.QPixmap(16, 16)
+            pixmap.fill(QtGui.QColor(hex_color))
+            self.palette.addItem(QtGui.QIcon(pixmap), name, hex_color)
+        self.palette.addItem("Custom", None)
+        self.custom = QtWidgets.QPushButton("Custom…")
+        self.custom.setMaximumWidth(72)
+        self.custom.setToolTip("Choose an opaque RGB color, or enter RGB / #RRGGBB")
+        layout.addWidget(self.preview)
+        layout.addWidget(self.palette, 1)
+        layout.addWidget(self.custom)
+        self.palette.activated.connect(self._palette_selected)
+        self.custom.clicked.connect(self._choose_custom)
+        self._refresh()
+
+    def rgb(self) -> tuple[int, int, int]:
+        return self._color.red(), self._color.green(), self._color.blue()
+
+    def set_color(self, color: QtGui.QColor) -> None:
+        if not color.isValid():
+            return
+        opaque = QtGui.QColor(color.red(), color.green(), color.blue())
+        changed = opaque != self._color
+        self._color = opaque
+        self._refresh()
+        if changed:
+            self.colorChanged.emit()
+
+    def _refresh(self) -> None:
+        hex_color = self._color.name()
+        self.preview.setStyleSheet(f"background-color: {hex_color}; border: 1px solid #808080;")
+        self.preview.setToolTip(hex_color.upper())
+        index = self.palette.findData(hex_color)
+        self.palette.setCurrentIndex(index if index >= 0 else self.palette.count() - 1)
+        self.custom.setToolTip(f"{hex_color.upper()} — choose RGB / hex color")
+
+    def _palette_selected(self, index: int) -> None:
+        value = self.palette.itemData(index)
+        if value is None:
+            self._choose_custom()
+            self._refresh()
+        else:
+            self.set_color(QtGui.QColor(value))
+
+    def _choose_custom(self) -> None:
+        color = QtWidgets.QColorDialog.getColor(self._color, self, "Pattern RGB color")
+        self.set_color(color)
 
 
 class PatternOutputWindow(QtOpenGL.QOpenGLWindow):
@@ -647,7 +756,19 @@ class PatternControlPanel(QtWidgets.QGroupBox):
             "Digital white level of the generated pattern. Display processing/HDR should remain disabled."
         )
 
-        self.invert = QtWidgets.QCheckBox("Invert black/white")
+        self.invert = QtWidgets.QCheckBox("Invert color mapping")
+        self._color_settings = QtCore.QSettings("Defleco LAB", "Defleco LAB")
+        self.light_color = PatternColorControl(
+            self._saved_color("light", "#ffffff"), title="Light color"
+        )
+        self.dark_color = PatternColorControl(
+            self._saved_color("dark", "#000000"), title="Dark color"
+        )
+        self.swap_colors = QtWidgets.QPushButton("Swap colors")
+        self.reset_colors = QtWidgets.QPushButton("Reset Black / White")
+        color_buttons = QtWidgets.QHBoxLayout()
+        color_buttons.addWidget(self.swap_colors)
+        color_buttons.addWidget(self.reset_colors)
         self.mode = QtWidgets.QComboBox()
         self.mode.addItem("Static", "static")
         self.mode.addItem("Stepped", "step")
@@ -759,6 +880,9 @@ class PatternControlPanel(QtWidgets.QGroupBox):
         form.addRow("Speckle size", self.speckle_size)
         form.addRow("Speckle seed", self.seed)
         form.addRow("Brightness", self.brightness)
+        form.addRow(self.light_color)
+        form.addRow(self.dark_color)
+        form.addRow(color_buttons)
         form.addRow(self.invert)
         form.addRow("Mode", self.mode)
         form.addRow("Rotation speed", self.speed)
@@ -811,6 +935,10 @@ class PatternControlPanel(QtWidgets.QGroupBox):
         ):
             _connect(widget, self._settings_changed)
         self.show_button.clicked.connect(self.show_output)
+        self.light_color.colorChanged.connect(self._colors_changed)
+        self.dark_color.colorChanged.connect(self._colors_changed)
+        self.swap_colors.clicked.connect(self._swap_colors)
+        self.reset_colors.clicked.connect(self._reset_colors)
         self.hide_button.clicked.connect(self.output.hide_output)
         self.step_button.clicked.connect(self.output.step)
         self.panel_width.valueChanged.connect(self._panel_size_changed)
@@ -818,6 +946,30 @@ class PatternControlPanel(QtWidgets.QGroupBox):
         self._panel_size_changed()
         self._update_context()
         self._settings_changed()
+
+    def _saved_color(self, key: str, default: str) -> QtGui.QColor:
+        color = QtGui.QColor(str(self._color_settings.value(f"pattern_colors/{key}", default)))
+        return color if color.isValid() else QtGui.QColor(default)
+
+    def _colors_changed(self) -> None:
+        for key, control in (("light", self.light_color), ("dark", self.dark_color)):
+            self._color_settings.setValue(f"pattern_colors/{key}", QtGui.QColor(*control.rgb()).name())
+        self._color_settings.sync()
+        self._settings_changed()
+
+    def _set_colors(self, dark: tuple[int, int, int], light: tuple[int, int, int]) -> None:
+        # Apply the pair atomically, with one output revision and one settings write.
+        for control, value in ((self.dark_color, dark), (self.light_color, light)):
+            blocker = QtCore.QSignalBlocker(control)
+            control.set_color(QtGui.QColor(*value))
+            del blocker
+        self._colors_changed()
+
+    def _swap_colors(self) -> None:
+        self._set_colors(self.light_color.rgb(), self.dark_color.rgb())
+
+    def _reset_colors(self) -> None:
+        self._set_colors((0, 0, 0), (255, 255, 255))
 
     def _render_failed(self, message: str) -> None:
         self.render_status.setText("Pattern output unavailable: " + message)
@@ -884,6 +1036,8 @@ class PatternControlPanel(QtWidgets.QGroupBox):
             angle_deg=self.angle.value(),
             phase_deg=self.phase.value(),
             brightness=float(self.brightness.value()),
+            dark_color=self.dark_color.rgb(),
+            light_color=self.light_color.rgb(),
             duty_percent=self.duty.value(),
             squircle_power=self.squircle_power.value(),
             spiral_arms=self.spiral_arms.value(),
