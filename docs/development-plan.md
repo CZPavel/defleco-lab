@@ -13,6 +13,12 @@ Status legend:
 
 ## Surface Enhancement LAB — 2026-11-09
 
+- [x] Surface screening profiles: all standard filters or standard plus boosted,
+      one fresh owned live frame, sequential full-resolution background processing.
+- [x] Enhanced and enhanced-background heatmap exports, optional NPY, versioned
+      recipes, incremental results and HTML gallery, cancellation and offline reruns.
+      See [surface-screening.md](surface-screening.md).
+
 - [x] Surface Compare shows original/result side by side; Surface LAB shows only
       the filtered result. Both reuse one workspace, settings and worker.
 

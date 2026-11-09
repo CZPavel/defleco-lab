@@ -24,6 +24,13 @@ def _settings(settings: dict) -> VisualizationSettings:
     low, high = float(settings.get("low", 0)), float(settings.get("high", 1))
     pl, ph = float(settings.get("percentile_low", 1)), float(settings.get("percentile_high", 99))
     opacity = float(settings.get("opacity", 0.5))
+    enhancement_gain = float(settings.get("enhancement_gain", 1.0))
+    if settings.get("overlay_base", "original") not in {"original", "enhanced"}:
+        raise ValueError("Unknown overlay base")
+    if settings.get("enhanced_polarity", "signed") not in {"signed", "bright", "dark", "absolute"}:
+        raise ValueError("Unknown enhanced polarity")
+    if not np.isfinite(enhancement_gain) or not 0 <= enhancement_gain <= 4:
+        raise ValueError("Enhancement gain must be finite and between 0 and 4")
     if not np.isfinite([low, high, pl, ph, opacity]).all():
         raise ValueError("Display settings must be finite")
     if not 0 <= pl < ph <= 100 or not 0 <= opacity <= 1:
@@ -81,6 +88,24 @@ def _response(result: ProcessingResult, settings: dict) -> np.ndarray:
     raise ValueError("Unknown response polarity")
 
 
+def _enhanced_rgb(image, result, response, settings):
+    source = _normalized_source(image, result)
+    enhanced = result.intermediates.get("enhanced")
+    if enhanced is None:
+        if "enhanced_polarity" in settings:
+            response = _response(result, {"polarity": settings["enhanced_polarity"]})
+        # Signed feature maps are added to normalized luminance, display only.
+        enhanced = source + (response[..., None] if source.ndim == 3 else response)
+    gain = float(settings.get("enhancement_gain", 1.0))
+    if gain != 1.0:
+        baseline = source
+        if enhanced.ndim == 2 and baseline.ndim == 3:
+            baseline = cv2.cvtColor(baseline, cv2.COLOR_BGR2GRAY)
+        enhanced = baseline + gain * (enhanced - baseline)
+    a = np.rint(np.clip(enhanced, 0, 1) * 255).astype(np.uint8)
+    return cv2.cvtColor(a, cv2.COLOR_GRAY2RGB if a.ndim == 2 else cv2.COLOR_BGR2RGB)
+
+
 def render_surface(image: np.ndarray, result: ProcessingResult, settings: dict) -> np.ndarray:
     display = _settings(settings)
     response = _response(result, settings)
@@ -90,13 +115,7 @@ def render_surface(image: np.ndarray, result: ProcessingResult, settings: dict) 
     if mode not in {"enhanced", "grayscale", "heatmap", "overlay"}:
         raise ValueError("Unknown Surface LAB display mode")
     if mode == "enhanced":
-        enhanced = result.intermediates.get("enhanced")
-        if enhanced is None:
-            # Signed feature maps are added to normalized luminance, display only.
-            enhanced = _normalized_source(image, result)
-            enhanced = enhanced + (response[..., None] if enhanced.ndim == 3 else response)
-        a = np.rint(np.clip(enhanced, 0, 1) * 255).astype(np.uint8)
-        return cv2.cvtColor(a, cv2.COLOR_GRAY2RGB if a.ndim == 2 else cv2.COLOR_BGR2RGB)
+        return _enhanced_rgb(image, result, response, settings)
     rgb = VisualizationTransform().render(response, display).image
     if mode == "overlay":
         # Response-dependent alpha leaves zero feature strength transparent.
@@ -128,7 +147,11 @@ def render_surface(image: np.ndarray, result: ProcessingResult, settings: dict) 
                 maximum = float(np.max(np.abs(values)))
             strength = np.clip(np.abs(response) / max(maximum, 1e-12), 0, 1)
         alpha = strength[..., None] * float(settings.get("opacity", 0.5))
-        base = original_rgb(_normalized_source(image, result))
+        base = (
+            _enhanced_rgb(image, result, response, settings)
+            if settings.get("overlay_base", "original") == "enhanced"
+            else original_rgb(_normalized_source(image, result))
+        )
         rgb = np.rint(base * (1 - alpha) + rgb * alpha).astype(np.uint8)
     return np.ascontiguousarray(rgb)
 

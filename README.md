@@ -88,6 +88,33 @@ method parameters and display settings. See the [filter catalog](docs/surface-fi
 for purposes, scales, intensity normalization and computational limits. Synthetic
 checks do not establish visibility or detection success on real paint defects.
 
+## Surface screening with static light
+
+In **Screening experiment → Plan**, choose **Surface screening** (50 standard
+filter variants, 100 result PNGs) or **Surface screening Extended** (standard plus
+boosted settings, 100 variants, 200 result PNGs). Select an existing parent folder,
+select your Basler camera and start Live, then click **Run Surface screening**.
+The run waits up to five seconds for one fresh camera frame. All filters process
+that same owned source at full resolution; the pattern generator is not used.
+
+Each variant exports **Enhanced** and **Enhanced + heatmap**, with the heatmap
+over the enhanced image at 50% maximum opacity. Its absolute response range uses
+the standard variant's 1st/99th percentiles and is shared with the boosted variant.
+The source is saved losslessly once, while the result PNGs are RGB8 display images.
+**Save numerical response (.npy)** is optional and initially off. JSON records the
+source identity, parameters, normalization, display settings, time and outcome.
+
+The job runs sequentially in the background. **Stop** takes effect after the
+current filter and preserves completed results. **Open results** opens the HTML
+gallery, including partial/error runs. **Process existing capture...** can repeat
+a saved Surface capture without a camera, using the selected Surface profile and
+NPY option; every repeat creates a new result directory.
+
+Boosted recipes are versioned experiments, independent of manual Surface LAB
+settings. They change parameters according to the [screening recipe reference](docs/surface-screening.md);
+histogram equalization and percentile stretch instead use a labelled display-only
+enhancement gain. Stronger settings may suppress fine scratches or amplify noise.
+
 ## Quick synthetic experiment
 
 1. Start with `Synthetic` and `fringes`.

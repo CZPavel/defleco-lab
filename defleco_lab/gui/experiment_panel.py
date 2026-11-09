@@ -18,7 +18,7 @@ class ExperimentPanel(QtWidgets.QGroupBox):
         super().__init__("Automated screening", parent)
         form = QtWidgets.QFormLayout(self)
 
-        intro = QtWidgets.QLabel(
+        intro = self.intro = QtWidgets.QLabel(
             "Captures a deterministic set of pattern states first, then processes the "
             "saved RAW frames offline. This avoids recomputing the camera acquisition "
             "for every analysis/display combination."
@@ -29,6 +29,8 @@ class ExperimentPanel(QtWidgets.QGroupBox):
         self.profile = QtWidgets.QComboBox()
         self.profile.addItem("Quick screening", "quick")
         self.profile.addItem("Extended screening", "extended")
+        self.profile.addItem("Surface screening", "surface")
+        self.profile.addItem("Surface screening Extended", "surface_extended")
         self.profile.setToolTip(
             "Quick is the recommended first pass. Extended adds more periods/angles "
             "after the geometry has been checked."
@@ -70,6 +72,8 @@ class ExperimentPanel(QtWidgets.QGroupBox):
             "Apply the dark and light colours selected in the pattern controls to every "
             "screening case. Leave unchecked for the standard screening recipes."
         )
+        self.surface_npy = QtWidgets.QCheckBox("Save numerical response (.npy)")
+        self.surface_npy.setToolTip("Save the unmodified float32 response for each Surface result.")
 
         self.start_capture = QtWidgets.QPushButton("Run pattern capture sweep")
         self.start_capture.setToolTip(
@@ -115,6 +119,7 @@ class ExperimentPanel(QtWidgets.QGroupBox):
         form.addRow("Experiment parent", root_row)
         form.addRow(self.use_pattern_colors)
         form.addRow(self.auto_process)
+        form.addRow(self.surface_npy)
         form.addRow(buttons)
         form.addRow(self.progress)
         form.addRow(self.status)
@@ -127,12 +132,14 @@ class ExperimentPanel(QtWidgets.QGroupBox):
             "parent": self.root.text().strip(),
             "auto_process": self.auto_process.isChecked(),
             "use_pattern_colors": self.use_pattern_colors.isChecked(),
+            "save_response": self.surface_npy.isChecked(),
         }
 
     def set_running(self, running: bool) -> None:
         self.start_capture.setEnabled(not running)
         self.process_existing.setEnabled(not running)
         self.stop.setEnabled(running)
+        self.profile.setEnabled(not running)
 
     def set_results_path(self, path: str) -> None:
         self._results_path = path
@@ -181,5 +188,29 @@ class ExperimentPanel(QtWidgets.QGroupBox):
             self.failed("Selected folder does not contain capture_manifest.json")
 
     def _update_count(self, *_args: object) -> None:
-        count = len(build_pattern_cases(str(self.profile.currentData())))
+        profile = str(self.profile.currentData())
+        surface = profile in {"surface", "surface_extended"}
+        self.settle_ms.setVisible(not surface)
+        self.form_label(self.settle_ms).setVisible(not surface)
+        self.use_pattern_colors.setVisible(not surface)
+        self.auto_process.setVisible(not surface)
+        self.surface_npy.setVisible(surface)
+        self.start_capture.setText("Run Surface screening" if surface else "Run pattern capture sweep")
+        self.intro.setText(
+            "Capture one fresh live image, then compare all surface filters at full resolution."
+            if surface else
+            "Captures a deterministic set of pattern states first, then processes the "
+            "saved RAW frames offline. This avoids recomputing the camera acquisition "
+            "for every analysis/display combination."
+        )
+        self.form_label(self.case_count).setText("Filter variants" if surface else "Pattern cases")
+        if surface:
+            from defleco_lab.processing.surface import surface_registry
+
+            count = len(surface_registry.infos()) * (2 if profile == "surface_extended" else 1)
+        else:
+            count = len(build_pattern_cases(profile))
         self.case_count.setText(str(count))
+
+    def form_label(self, widget):
+        return self.layout().labelForField(widget)

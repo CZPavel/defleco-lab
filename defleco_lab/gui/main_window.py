@@ -5,7 +5,7 @@ from collections import deque
 from datetime import datetime
 from importlib.resources import files
 from pathlib import Path
-from time import perf_counter
+from time import perf_counter, perf_counter_ns
 
 import cv2
 import numpy as np
@@ -99,6 +99,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.experiment_timer = QtCore.QTimer(self)
         self.experiment_timer.setInterval(30)
         self.experiment_timer.timeout.connect(self._experiment_poll)
+        self.surface_capture_timer = QtCore.QTimer(self)
+        self.surface_capture_timer.setSingleShot(True)
+        self.surface_capture_timer.setInterval(5000)
+        self.surface_capture_timer.timeout.connect(self._surface_capture_timeout)
+        self._surface_capture_request = None
+        self._surface_tab_states = None
         self.timer = QtCore.QTimer(self)
         self.timer.setInterval(60)
         self.timer.timeout.connect(self._next_frame)
@@ -718,6 +724,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.timer.start()
 
     def _stop(self):
+        if self.surface_capture_timer.isActive():
+            self.surface_capture_timer.stop()
+            self._surface_capture_request = None
+            self._set_surface_screening_lock(False)
+            self.experiment.failed("Camera stopped while waiting for a fresh Surface frame.")
         self.timer.stop()
         self.camera_timer.stop()
         if self.camera_worker is not None:
@@ -771,6 +782,12 @@ class MainWindow(QtWidgets.QMainWindow):
 
     @QtCore.Slot(object)
     def _run_capture_experiment(self, config: dict) -> None:
+        if self._screening_busy():
+            self.experiment.failed("A screening job is already running.")
+            return
+        if str(config.get("profile", "quick")) in {"surface", "surface_extended"}:
+            self._run_surface_capture(config)
+            return
         if self.source_combo.currentText() != "Basler":
             self.experiment.failed("Select Basler as Source and start Live acquisition first.")
             return
@@ -808,6 +825,104 @@ class MainWindow(QtWidgets.QMainWindow):
         self.experiment.progress.setValue(0)
         self._write_capture_manifest(status="capturing")
         self._experiment_next_case()
+
+    def _screening_busy(self) -> bool:
+        worker = self._experiment_processing_worker
+        return bool(self.experiment_timer.isActive() or self.surface_capture_timer.isActive()
+                    or (worker is not None and worker.isRunning()))
+
+    def _run_surface_capture(self, config: dict) -> None:
+        if self.source_combo.currentText() != "Basler" or self.camera_worker is None:
+            self.experiment.failed("Select Basler as Source and start Live acquisition first.")
+            return
+        if not self.camera_worker.isRunning():
+            self.experiment.failed("Basler camera is not running. Press Live first.")
+            return
+        parent = Path(str(config.get("parent", ""))).expanduser()
+        if not str(config.get("parent", "")).strip() or not parent.is_dir():
+            self.experiment.failed("Choose an existing experiment parent folder.")
+            return
+        self._surface_capture_request = {
+            "parent": parent, "profile": config["profile"],
+            "save_response": bool(config.get("save_response", False)),
+            "after_ns": perf_counter_ns(), "camera": self.camera_worker,
+        }
+        self.experiment.set_results_path("")
+        self._set_surface_screening_lock(True)
+        self.experiment.set_running(True)
+        self.experiment.update_progress(0, 1, "Waiting for a fresh camera frame (5 s timeout)...")
+        self.surface_capture_timer.start()
+
+    def _surface_capture_timeout(self) -> None:
+        if self._surface_capture_request is not None:
+            self._surface_capture_request = None
+            self._set_surface_screening_lock(False)
+            self.experiment.failed("Timed out waiting for a fresh live camera frame.")
+
+    def _set_surface_screening_lock(self, locked: bool) -> None:
+        if locked and self._surface_tab_states is None:
+            self._surface_tab_states = [self.tabs.isTabEnabled(i) for i in range(self.tabs.count())]
+            self.tabs.setCurrentIndex(0)
+            for i in range(1, self.tabs.count()):
+                self.tabs.setTabEnabled(i, False)
+        elif not locked and self._surface_tab_states is not None:
+            for i, enabled in enumerate(self._surface_tab_states):
+                self.tabs.setTabEnabled(i, enabled)
+            self._surface_tab_states = None
+
+    def _accept_surface_frame(self, packet) -> None:
+        request = self._surface_capture_request
+        if (request is None or self.camera_worker is not request["camera"]
+                or packet.host_timestamp_ns <= request["after_ns"]):
+            return
+        if perf_counter_ns() - request["after_ns"] >= 5_000_000_000:
+            self.surface_capture_timer.stop()
+            self._surface_capture_timeout()
+            return
+        self._surface_capture_request = None
+        self.surface_capture_timer.stop()
+        from defleco_lab.experiments.surface_screening import SurfaceScreeningWorker
+
+        worker = SurfaceScreeningWorker(
+            None, self, capture=(request["parent"], packet.copy_owned(), request["profile"],
+                                 request["save_response"]),
+        )
+        self._start_surface_worker(worker)
+
+    def _start_surface_worker(self, worker) -> None:
+        self._set_surface_screening_lock(True)
+        self.experiment.set_running(True)
+        self._experiment_processing_worker = worker
+        worker.progressChanged.connect(self.experiment.update_progress)
+        worker.completed.connect(self._surface_processing_complete)
+        worker.failed.connect(self._surface_processing_failed)
+        worker.finished.connect(lambda: self._release_screening_worker(worker))
+        worker.start()
+
+    def _release_screening_worker(self, worker) -> None:
+        if self._experiment_processing_worker is worker:
+            self._experiment_processing_worker = None
+        worker.deleteLater()
+
+    @QtCore.Slot(str)
+    def _surface_processing_complete(self, manifest: str) -> None:
+        path = Path(manifest)
+        gallery = path.parent / "screening_results.html"
+        self.experiment.set_results_path(str(gallery))
+        try:
+            status = json.loads(path.read_text(encoding="utf-8")).get("status", "unknown")
+        except (OSError, ValueError):
+            status = "unknown"
+        self.experiment.set_running(False)
+        self._set_surface_screening_lock(False)
+        self.experiment.status.setText(f"Surface screening: {status}. Results: {gallery}")
+        self.statusBar().showMessage(f"Surface screening: {status}")
+
+    @QtCore.Slot(str)
+    def _surface_processing_failed(self, message: str) -> None:
+        self._set_surface_screening_lock(False)
+        self.experiment.failed(message)
+        self.statusBar().showMessage(f"Surface screening: {message}")
 
     def _experiment_next_case(self) -> None:
         if not self._experiment_cases or self._experiment_root is None:
@@ -968,11 +1083,27 @@ class MainWindow(QtWidgets.QMainWindow):
         if not (root / "capture_manifest.json").exists():
             self.experiment.failed("capture_manifest.json was not found.")
             return
-        if (
-            self._experiment_processing_worker is not None
-            and self._experiment_processing_worker.isRunning()
-        ):
+        if self._screening_busy():
             self.experiment.failed("A screening processing job is already running.")
+            return
+
+        try:
+            manifest = json.loads((root / "capture_manifest.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            self.experiment.failed(f"Invalid capture manifest: {exc}")
+            return
+        if str(manifest.get("profile", "")) in {"surface", "surface_extended"}:
+            from defleco_lab.experiments.surface_screening import SurfaceScreeningWorker
+
+            config = self.experiment.config()
+            profile = config["profile"]
+            if profile not in {"surface", "surface_extended"}:
+                profile = manifest["profile"]
+            self.experiment.set_results_path("")
+            worker = SurfaceScreeningWorker(
+                root, self, profile=profile, save_response=config["save_response"]
+            )
+            self._start_surface_worker(worker)
             return
 
         self.experiment.set_running(True)
@@ -1005,6 +1136,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self._experiment_processing_worker = None
 
     def _stop_experiment(self) -> None:
+        if self.surface_capture_timer.isActive():
+            self.surface_capture_timer.stop()
+            self._surface_capture_request = None
+            self._set_surface_screening_lock(False)
+            self.experiment.set_running(False)
+            self.experiment.status.setText("Surface capture cancelled.")
         if self.experiment_timer.isActive():
             self.experiment_timer.stop()
             self._write_capture_manifest(status="cancelled")
@@ -1027,6 +1164,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if not packets:
             return
         for packet in packets:
+            self._accept_surface_frame(packet)
             self.history.append(packet)
             if self.recorder:
                 self.recorder.append(packet)
@@ -1115,6 +1253,11 @@ class MainWindow(QtWidgets.QMainWindow):
         sender = self.sender()
         if isinstance(sender, BaslerAcquisitionWorker) and sender is not self.camera_worker:
             return
+        if self.surface_capture_timer.isActive():
+            self.surface_capture_timer.stop()
+            self._surface_capture_request = None
+            self._set_surface_screening_lock(False)
+            self.experiment.failed(f"Camera error while waiting for Surface frame: {message}")
         self._camera_error_active = True
         self._camera_error_message = message
         self.camera_timer.stop()

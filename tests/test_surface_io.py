@@ -23,6 +23,34 @@ def test_bgr16_display_does_not_clip_to_255():
     np.testing.assert_array_equal(image, original)
 
 
+def test_enhanced_overlay_uses_same_enhanced_base_and_preserves_signed_response():
+    image = np.full((1, 3), 128, np.uint8)
+    response = np.array([[-.1, 0, .1]], np.float32)
+    result = ProcessingResult(response)
+    common = {"range": "fixed", "low": 0, "high": .1,
+              "polarity": "absolute", "enhanced_polarity": "signed"}
+    enhanced = render_surface(image, result, {**common, "mode": "enhanced"})
+    heatmap = render_surface(image, result, {**common, "mode": "heatmap"})
+    overlay = render_surface(image, result, {**common, "mode": "overlay",
+                                            "overlay_base": "enhanced", "opacity": .5})
+    np.testing.assert_array_equal(overlay[0, 1], enhanced[0, 1])
+    expected = np.rint((enhanced[0, 0].astype(float) + heatmap[0, 0]) * .5).astype(np.uint8)
+    np.testing.assert_array_equal(overlay[0, 0], expected)
+    assert enhanced[0, 0, 0] < 128 < enhanced[0, 2, 0]
+    np.testing.assert_array_equal(result.primary, response)
+
+
+def test_enhancement_display_gain_does_not_change_response():
+    image = np.full((2, 2), .4, np.float32)
+    response = np.full((2, 2), .5, np.float32)
+    enhanced = np.full((2, 2), .6, np.float32)
+    result = ProcessingResult(response, {"enhanced": enhanced})
+    actual = render_surface(image, result, {"mode": "enhanced", "enhancement_gain": 1.5})
+    assert actual[0, 0, 0] == 179
+    np.testing.assert_array_equal(result.primary, response)
+    np.testing.assert_array_equal(result.intermediates["enhanced"], enhanced)
+
+
 @pytest.mark.parametrize("suffix", [".png", ".tiff"])
 def test_export_roundtrip_and_refuse_overwrite(tmp_path, suffix):
     image = np.full((8, 9), 32768, np.uint16)
