@@ -55,6 +55,7 @@ The main image tabs are:
 | Motion Debug | Motion-mask/compensation diagnostics when available. |
 | Surface Compare | Original and Surface result side by side, with linked zoom and pan. |
 | Surface LAB | Surface result alone. |
+| GPixel Surface Fusion | Original/result comparison for seven configurable combined enhancement recipes. |
 
 Surface Compare and Surface LAB share one source, selected method, parameters,
 display settings and result; switching between them does not rerun a filter.
@@ -146,6 +147,17 @@ NPY responses are saved separately. Each image filename identifies run, method,
 variant and output. Stop preserves completed work and its gallery; an existing
 Surface capture can be reprocessed offline in a new output directory. Full recipe
 and failure details are in [Surface screening](surface-screening.md).
+
+## GPixel Surface Fusion
+
+K01–K07 combine existing filters with per-step switches, configurable parameters,
+overall intensity and independent presets. K07 normalizes Hessian, directional
+morphology and median residual branches before weighted-sum or maximum fusion.
+Signed intermediates stay float; Fusion uses an exact float median and native-pixel
+preview scaling. Clipping is reported. Its limited screening profile processes
+the original selected in the Fusion tab through seven recommended configurations.
+See [Fusion recipes and first test](gpixel-surface-fusion.md). These are exploratory
+enhancements, not probabilities or validated defect decisions.
 
 ## Verification and remaining limits
 

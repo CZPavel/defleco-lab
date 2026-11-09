@@ -11,6 +11,21 @@ Status legend:
 - [~] implemented as a usable first version, still needs physical validation/refinement
 - [ ] planned / not implemented yet
 
+## GPixel Surface Fusion — 2026-11-09
+
+- [x] Independent linked Original/Result tab with K01–K07, per-step controls,
+      intensity, response views, default reset, presets and reproducible export.
+- [x] Shared float-domain Surface kernels; signed residual intermediates avoid
+      source renormalization. K07 normalizes branches before weighted/max fusion.
+- [x] Native-pixel preview parameter scaling and exact float median for Fusion;
+      original Surface method behavior retained.
+- [x] Seven-recipe selected-image screening through the existing worker/gallery.
+- [ ] Real-image evaluation of visibility, halos, noise and parameter robustness;
+      recommended defaults and weights remain hypotheses, not optima.
+
+See [GPixel Surface Fusion](gpixel-surface-fusion.md) for first K01/K07 use,
+normalization, parameters, performance limits and metadata.
+
 ## Surface Enhancement LAB — 2026-11-09
 
 - [x] Surface heatmap controls include the enhanced or original overlay base;

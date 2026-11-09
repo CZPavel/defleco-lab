@@ -227,30 +227,33 @@ def export_surface(path, image, result, metadata, settings, save_response=True) 
     return paths
 
 
-def save_preset(path, config):
-    validated = _validate_preset(config)
+def save_preset(path, config, *, method_registry=None):
+    validated = _validate_preset(config, method_registry=method_registry)
     Path(path).write_text(
         json.dumps(validated, indent=2, ensure_ascii=False, allow_nan=False), encoding="utf-8"
     )
 
 
-def load_preset(path) -> dict:
-    return _validate_preset(json.loads(Path(path).read_text(encoding="utf-8")))
+def load_preset(path, *, method_registry=None) -> dict:
+    return _validate_preset(
+        json.loads(Path(path).read_text(encoding="utf-8")), method_registry=method_registry
+    )
 
 
-def _validate_preset(config):
+def _validate_preset(config, *, method_registry=None):
     from defleco_lab.processing.surface import surface_registry
 
+    selected_registry = method_registry if method_registry is not None else surface_registry
     if not isinstance(config, dict):
         raise TypeError("Preset must be an object")
     method_id = config.get("method_id")
-    if method_id not in {info.id for info in surface_registry.infos()}:
+    if method_id not in {info.id for info in selected_registry.infos()}:
         raise ValueError("Unknown Surface LAB method")
     params = config.get("parameters", {})
     if not isinstance(params, dict):
         raise TypeError("Preset parameters must be an object")
     # Parameter validation must not trigger expensive image processing.
-    surface_registry.create(method_id, **params)
+    selected_registry.create(method_id, **params)
     settings = config.get("display_settings", {})
     _settings(settings)
     if settings.get("mode", "grayscale") not in {"enhanced", "grayscale", "heatmap", "overlay"}:

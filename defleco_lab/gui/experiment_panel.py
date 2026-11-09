@@ -31,6 +31,7 @@ class ExperimentPanel(QtWidgets.QGroupBox):
         self.profile.addItem("Extended screening", "extended")
         self.profile.addItem("Surface screening", "surface")
         self.profile.addItem("Surface screening Extended", "surface_extended")
+        self.profile.addItem("GPixel Surface Fusion", "surface_fusion")
         self.profile.setToolTip(
             "Quick is the recommended first pass. Extended adds more periods/angles "
             "after the geometry has been checked."
@@ -179,9 +180,7 @@ class ExperimentPanel(QtWidgets.QGroupBox):
             self.captureRequested.emit(config)
 
     def _request_existing(self) -> None:
-        folder = QtWidgets.QFileDialog.getExistingDirectory(
-            self, "Open screening workspace"
-        )
+        folder = QtWidgets.QFileDialog.getExistingDirectory(self, "Open screening workspace")
         if folder and (Path(folder) / "capture_manifest.json").exists():
             self.processRequested.emit(folder)
         elif folder:
@@ -189,22 +188,31 @@ class ExperimentPanel(QtWidgets.QGroupBox):
 
     def _update_count(self, *_args: object) -> None:
         profile = str(self.profile.currentData())
-        surface = profile in {"surface", "surface_extended"}
+        surface = profile in {"surface", "surface_extended", "surface_fusion"}
         self.settle_ms.setVisible(not surface)
         self.form_label(self.settle_ms).setVisible(not surface)
         self.use_pattern_colors.setVisible(not surface)
         self.auto_process.setVisible(not surface)
         self.surface_npy.setVisible(surface)
-        self.start_capture.setText("Run Surface screening" if surface else "Run pattern capture sweep")
+        self.start_capture.setText(
+            "Run Surface screening" if surface else "Run pattern capture sweep"
+        )
+        if profile == "surface_fusion":
+            self.start_capture.setText("Run Fusion screening")
         self.intro.setText(
             "Capture one fresh live image, then compare all surface filters at full resolution."
-            if surface else
-            "Captures a deterministic set of pattern states first, then processes the "
+            if surface
+            else "Captures a deterministic set of pattern states first, then processes the "
             "saved RAW frames offline. This avoids recomputing the camera acquisition "
             "for every analysis/display combination."
         )
         self.form_label(self.case_count).setText("Filter variants" if surface else "Pattern cases")
-        if surface:
+        if profile == "surface_fusion":
+            self.intro.setText(
+                "Run K01–K07 on the image selected in GPixel Surface Fusion at full resolution."
+            )
+            count = 7
+        elif surface:
             from defleco_lab.processing.surface import surface_registry
 
             count = len(surface_registry.infos()) * (2 if profile == "surface_extended" else 1)

@@ -21,7 +21,7 @@ from defleco_lab.processing.surface import normalize_input, surface_registry
 
 CAPTURE_SCHEMA = "defleco.surface.screening.capture.v1"
 RECIPE_VERSION = "surface-screening.v1"
-PROFILES = {"surface", "surface_extended"}
+PROFILES = {"surface", "surface_extended", "surface_fusion"}
 DEFAULT_DISPLAY = {
     "range": "percentile",
     "percentile_low": 1.0,
@@ -110,6 +110,7 @@ def create_surface_workspace(
             "source_shape": list(image.shape),
             "input": input_info,
             "frame": packet.public_metadata(),
+            "source_filename": packet.metadata.get("source_filename"),
         },
     )
     return root
@@ -119,6 +120,31 @@ def build_surface_recipes(profile: str = "surface") -> list[dict[str, Any]]:
     """Build the approved versioned standard/boosted configurations."""
     if profile not in PROFILES:
         raise ValueError(f"Unknown Surface profile: {profile}")
+    if profile == "surface_fusion":
+        from defleco_lab.processing.surface.fusion import (
+            FUSION_VERSION,
+            fusion_registry,
+            recipe_metadata,
+        )
+
+        recipes = []
+        for info in fusion_registry.infos():
+            params = dict(fusion_registry.create(info.id).parameters)
+            recipes.append(
+                {
+                    "version": FUSION_VERSION,
+                    "method_id": info.id,
+                    "method_name": info.name,
+                    "family": info.category,
+                    "variant": "recommended",
+                    "parameters": params,
+                    "enhancement_gain": 1.0,
+                    "display_only_boost": False,
+                    "interpretation": "experimental fused response, not confidence",
+                    "fusion": recipe_metadata(info.id, params),
+                }
+            )
+        return recipes
     recipes = []
     for info in surface_registry.infos():
         default = {key: spec["default"] for key, spec in info.parameters.items()}
@@ -277,6 +303,11 @@ def process_surface_workspace(
         capture.get("display_settings") if display_settings is None else display_settings
     )
     recipes = build_surface_recipes(profile)
+    registry = surface_registry
+    if profile == "surface_fusion":
+        from defleco_lab.processing.surface.fusion import fusion_registry
+
+        registry = fusion_registry
     normalized, input_info = normalize_input(image)
     run = _unique_directory(root, "run")
     manifest_path = run / "results_manifest.json"
@@ -288,7 +319,7 @@ def process_surface_workspace(
         "frame": capture["frame"],
         "source_shape": list(image.shape),
         "profile": profile,
-        "recipe_version": RECIPE_VERSION,
+        "recipe_version": recipes[0]["version"] if recipes else RECIPE_VERSION,
         "save_response": save_response,
         "requested_display_settings": configured_display,
         "status": "running",
@@ -296,6 +327,10 @@ def process_surface_workspace(
         "outputs": [],
         "gallery": "screening_results.html",
     }
+    if profile == "surface_fusion":
+        manifest["source_filename"] = capture.get("source_filename")
+        manifest["native_resolution"] = True
+        manifest["spatial_scale"] = 1.0
     _write_json(manifest_path, manifest)
     baseline_range: dict[str, tuple[float, float]] = {}
     baseline_result = None
@@ -334,6 +369,15 @@ def process_surface_workspace(
                 display_settings=configured_display
                 | {"enhancement_gain": recipe["enhancement_gain"]},
             )
+            if profile == "surface_fusion":
+                entry.update(
+                    source_filename=capture.get("source_filename"),
+                    native_resolution=True,
+                    spatial_scale=1.0,
+                    roi=None,
+                    source_shape=list(image.shape),
+                    processing_shape=list(image.shape),
+                )
             if progress:
                 progress(index, len(recipes), f"{recipe['method_name']} / {recipe['variant']}")
             try:
@@ -343,10 +387,10 @@ def process_surface_workspace(
                 if recipe["display_only_boost"] and baseline_result is not None:
                     result = baseline_result
                 else:
-                    result = surface_registry.create(
-                        recipe["method_id"], **recipe["parameters"]
-                    ).process([normalized], keep_intermediates=True)
-                    if recipe["variant"] == "standard":
+                    result = registry.create(recipe["method_id"], **recipe["parameters"]).process(
+                        [normalized], keep_intermediates=True
+                    )
+                    if recipe["variant"] in {"standard", "recommended"}:
                         baseline_range[recipe["method_id"]] = _range(
                             result.primary, configured_display
                         )

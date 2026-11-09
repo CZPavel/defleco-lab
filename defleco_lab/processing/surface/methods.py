@@ -21,6 +21,15 @@ from ..single_frame.filters import (
     LocalBackgroundResidual,
     StructureTensor,
 )
+from .kernels import (
+    clahe_luminance,
+    fft_highpass,
+    hessian_signed,
+    local_residual,
+    median_residual,
+    oriented_footprint,
+    unsharp,
+)
 
 surface_registry = MethodRegistry()
 
@@ -243,13 +252,7 @@ def _pol(a, mode):
 
 
 def _foot(size, angle):
-    f = np.zeros((size, size), np.uint8)
-    c = size // 2
-    d = (size - 1) / 2
-    t = math.radians(angle)
-    v = np.rint([d * math.cos(t), d * math.sin(t)]).astype(int)
-    cv2.line(f, (c - v[0], c - v[1]), (c + v[0], c + v[1]), 1, 1)
-    return f
+    return oriented_footprint(size, angle)
 
 
 def _ridge(name, g, sigma, polarity):
@@ -307,14 +310,7 @@ class _SurfaceMethod(ProcessingMethod):
         polarity = p.get("polarity", p.get("ridge_polarity", "absolute"))
         size = int(p.get("size", 15))
         enhanced = None
-        clahe = lambda x: (
-            cv2.createCLAHE(
-                clipLimit=float(p.get("clip", 2)), tileGridSize=(int(p.get("grid", 8)),) * 2
-            )
-            .apply(_u8(x))
-            .astype(np.float32)
-            / 255
-        )
+        clahe = lambda x: clahe_luminance(x, p.get("clip", 2), p.get("grid", 8))
         if name == "brightness":
             enhanced = np.clip(a * p["amount"] + p["offset"], 0, 1)
         elif name == "gamma":
@@ -355,10 +351,9 @@ class _SurfaceMethod(ProcessingMethod):
                 else cv2.fastNlMeansDenoising(source, None, p["amount"] * 5, 7, 21)
             ).astype(np.float32) / 255
         elif name == "unsharp":
-            blur = _blur(a, sigma)
-            enhanced = np.clip(a + p["amount"] * (a - blur), 0, 1)
+            enhanced = unsharp(a, sigma, p["amount"])
         elif name == "local_residual":
-            signed = g - _blur(g, sigma)
+            signed = local_residual(g, sigma)
             out = _pol(signed, polarity)
             # Existing filter supplies the same absolute response.
             if polarity == "absolute":
@@ -368,8 +363,7 @@ class _SurfaceMethod(ProcessingMethod):
                     .primary
                 )
         elif name == "median_residual":
-            background = cv2.medianBlur(_u8(g), size).astype(np.float32) / 255
-            out = _pol(g - background, polarity)
+            out = _pol(median_residual(g, size), polarity)
         elif name == "dog":
             signed = _blur(g, sigma) - _blur(g, float(p["large"]))
             out = _pol(signed, polarity)
@@ -386,7 +380,9 @@ class _SurfaceMethod(ProcessingMethod):
         elif name in ("retinex", "multiscale_retinex"):
             scales = (sigma,) if name == "retinex" else (sigma, sigma * 2, sigma * 4)
             out = sum(np.log(g + 0.01) - np.log(_blur(g, s) + 0.01) for s in scales) / len(scales)
-        elif name in ("homomorphic", "fft_highpass", "fft_bandpass"):
+        elif name == "fft_highpass":
+            out = fft_highpass(g, sigma)
+        elif name in ("homomorphic", "fft_bandpass"):
             src = np.log(g + 0.01) if name == "homomorphic" else g
             h, w = g.shape
             fy = np.fft.fftfreq(h)[:, None]
@@ -467,14 +463,7 @@ class _SurfaceMethod(ProcessingMethod):
                 polarity,
             )
         elif name == "hessian":
-            b = _blur(g, sigma)
-            xx = cv2.Sobel(b, cv2.CV_32F, 2, 0)
-            yy = cv2.Sobel(b, cv2.CV_32F, 0, 2)
-            xy = cv2.Sobel(b, cv2.CV_32F, 1, 1)
-            root = np.sqrt((xx - yy) ** 2 + 4 * xy**2)
-            l1 = (xx + yy + root) / 2
-            l2 = (xx + yy - root) / 2
-            out = _pol(-np.where(np.abs(l1) > np.abs(l2), l1, l2), polarity)
+            out = _pol(hessian_signed(g, sigma), polarity)
         elif name in ("frangi", "sato", "meijering"):
             out = _ridge(name, g, sigma, polarity)
         elif name == "gabor":

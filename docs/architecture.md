@@ -63,6 +63,24 @@ weighted by displayed response strength. The sidecar records processing/source s
 source intensity metadata, method diagnostics, ROI and visualization configuration.
 PNG/TIFF hold display images, while optional NPY holds the numerical response.
 
+## GPixel Surface Fusion
+
+Fusion reuses the Surface workspace and bounded worker with an injected registry;
+it does not register K01–K07 in either existing method selector. A small shared
+kernel module holds the existing float-domain filter equations, while Fusion
+recipes assemble sequential or independent branches. Signed intermediate arrays
+bypass source normalization. Fusion's exact float median is distinct from the
+legacy Surface median's quantized background, preserving the existing outputs.
+
+The worker normalizes the full source, crops the ROI and reduces preview pixels,
+then passes the actual spatial scale to Fusion so parameters retain native-pixel
+meaning. Numerical response, enhanced image and display mapping remain separate.
+Recipe version, step configuration, weights, normalization, effective scale and
+clipping diagnostics accompany existing source/ROI/export metadata. An explicitly
+opened file is retained until Use input source; only the visible workspace
+processes incoming frames. The limited selected-image screening profile reuses
+the existing capture/processing/export/gallery path for seven recommended recipes.
+
 ## Pattern output
 
 The physical pattern generator is part of the same application but remains

@@ -23,6 +23,8 @@ data, recorded sessions, image sequences, or an explicitly selected Basler camer
 - Raw-frame record/replay so the same sequence can be evaluated repeatedly with different algorithms.
 - Dark PySide6 engineering UI with typed parameters, display-only range/heatmap/alpha controls, shared compare ranges, zoom, pan, presets, Analysis ROIs, and Motion ROIs.
 - CPU image analysis; native-resolution GPU pattern output using OpenGL 3.3. OpenCV CUDA is not required.
+- GPixel Surface Fusion: seven configurable combined enhancement experiments, linked
+  original/result views, native-pixel ROI, presets and a bounded seven-recipe sweep.
 
 ## Install on Windows
 
@@ -94,6 +96,26 @@ are 8-bit; NPY retains signed/fractional values. Save/load JSON presets reproduc
 method parameters and display settings. See the [filter catalog](docs/surface-filters.md)
 for purposes, scales, intensity normalization and computational limits. Synthetic
 checks do not establish visibility or detection success on real paint defects.
+
+## GPixel Surface Fusion
+
+The **GPixel Surface Fusion** tab adds K01–K07: CLAHE plus directional morphology,
+multi-scale Hessian, median residual plus Hessian, CLAHE plus FFT, local residual
+plus morphology, CLAHE plus unsharp, and weighted three-branch fusion. Each step
+can be enabled/disabled and configured; intensity controls the final enhancement.
+These experiments improve visual exploration and do not produce defect confidence.
+
+Start with **Open image → K01**, then draw a small ROI and compare **K07** using
+**Process native ROI**. Spatial parameters are native-image pixels even in preview.
+K03/K07 exact float median filters can be slow at full resolution; prefer an ROI
+for the first experiment. Save/load presets and PNG/TIFF + optional NPY + JSON
+reuse the Surface workflow. A file stays selected across tab navigation;
+**Use input source** returns to shared acquisition/replay.
+
+**Screening → Plan → GPixel Surface Fusion** runs just the seven recommended
+configurations on that selected original at full resolution, saving 14 result PNGs
+and metadata. No camera is required for a file-based run. See the
+[recipe and first-test guide](docs/gpixel-surface-fusion.md).
 
 ## Surface screening with static light
 

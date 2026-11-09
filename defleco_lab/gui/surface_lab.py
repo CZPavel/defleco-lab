@@ -20,8 +20,10 @@ from .visualization import COLORMAPS
 class SurfaceWorker(QtCore.QThread):
     ready = QtCore.Signal()
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, *, method_registry=None, scale_parameters=False):
         super().__init__(parent)
+        self.method_registry = method_registry if method_registry is not None else surface_registry
+        self.scale_parameters = scale_parameters
         self.condition = Condition()
         self.pending = None
         self.completed = None
@@ -97,6 +99,7 @@ class SurfaceWorker(QtCore.QThread):
                         roi["y"] : roi["y"] + roi["height"], roi["x"] : roi["x"] + roi["width"]
                     ]
                 )
+                native_shape = image.shape[:2]
                 if not request["native"] and image.shape[0] * image.shape[1] > 1_000_000:
                     factor = (1_000_000 / (image.shape[0] * image.shape[1])) ** 0.5
                     size = (
@@ -106,9 +109,14 @@ class SurfaceWorker(QtCore.QThread):
                     image = cv2.resize(image, size, interpolation=cv2.INTER_AREA)
                     normalized = cv2.resize(normalized, size, interpolation=cv2.INTER_AREA)
                 image = np.ascontiguousarray(image)
-                result = surface_registry.create(
+                spatial_scale = min(
+                    image.shape[0] / native_shape[0], image.shape[1] / native_shape[1]
+                )
+                request["spatial_scale"] = spatial_scale
+                context = {"spatial_scale": spatial_scale} if self.scale_parameters else {}
+                result = self.method_registry.create(
                     request["method_id"], **request["parameters"]
-                ).process([normalized], keep_intermediates=True)
+                ).process([normalized], keep_intermediates=True, **context)
                 result.intermediates["_source_normalized"] = normalized
                 rendered = render_surface(image, result, request["settings"])
                 canvas = (
@@ -142,17 +150,23 @@ class SurfaceWorker(QtCore.QThread):
 
 
 class SurfaceLab(QtWidgets.QWidget):
-    def __init__(self, parent=None):
+    inputSourceRequested = QtCore.Signal()
+
+    def __init__(self, parent=None, *, method_registry=None, scale_parameters=False):
         super().__init__(parent)
+        self.method_registry = method_registry if method_registry is not None else surface_registry
         self.source = None
         self.source_metadata = {}
+        self.follow_input = True
         self.snapshot = None
         self.active = False
         self._updating = False
         self.native_inflight = False
         self.pinned = False
         self.pinned_roi = None
-        self.worker = SurfaceWorker(self)
+        self.worker = SurfaceWorker(
+            self, method_registry=self.method_registry, scale_parameters=scale_parameters
+        )
         self.worker.ready.connect(self._completed)
         self.worker.start()
         layout = QtWidgets.QHBoxLayout(self)
@@ -181,14 +195,14 @@ class SurfaceLab(QtWidgets.QWidget):
         scroll.setMaximumWidth(340)
         scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         controls = QtWidgets.QWidget()
-        form = QtWidgets.QFormLayout(controls)
+        form = self.controls_form = QtWidgets.QFormLayout(controls)
         self.family, self.method = QtWidgets.QComboBox(), QtWidgets.QComboBox()
         for combo in (self.family, self.method):
             combo.setMinimumContentsLength(12)
             combo.setSizeAdjustPolicy(
                 QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
             )
-        self.family.addItems(sorted({info.category for info in surface_registry.infos()}))
+        self.family.addItems(sorted({info.category for info in self.method_registry.infos()}))
         form.addRow("Family", self.family)
         form.addRow("Method", self.method)
         self.params = ParameterPanel()
@@ -230,6 +244,7 @@ class SurfaceLab(QtWidgets.QWidget):
             form.addRow(label, widget)
         for label, callback in [
             ("Open image", self.open_image),
+            ("Use input source", self.use_input_source),
             ("Draw ROI", lambda: self.roi_view().begin_roi("analysis")),
             ("Clear ROI", lambda: self.roi_view().clear_rois("analysis")),
             ("Process native ROI", self.process_roi),
@@ -278,7 +293,7 @@ class SurfaceLab(QtWidgets.QWidget):
     def _family_changed(self, *_):
         self._updating = True
         self.method.clear()
-        for info in surface_registry.infos():
+        for info in self.method_registry.infos():
             if info.category == self.family.currentText():
                 self.method.addItem(info.name, info.id)
         self._updating = False
@@ -287,7 +302,7 @@ class SurfaceLab(QtWidgets.QWidget):
     def _method_changed(self, *_):
         if self._updating or not self.method.currentData():
             return
-        info = next(i for i in surface_registry.infos() if i.id == self.method.currentData())
+        info = next(i for i in self.method_registry.infos() if i.id == self.method.currentData())
         self._updating = True
         self.params.set_schema(info.parameters)
         self.method.setToolTip(f"{info.description}\n{info.limitations}")
@@ -322,7 +337,16 @@ class SurfaceLab(QtWidgets.QWidget):
         elif self.source is not None:
             self.submit(self.pinned, self.pinned_roi if self.pinned else None)
 
-    def set_image(self, image, metadata=None):
+    def set_image(self, image, metadata=None, *, from_source=False):
+        if from_source and not self.follow_input:
+            return
+        if not from_source and metadata and metadata.get("source_filename"):
+            self.worker.invalidate()
+            self.native_inflight = False
+            self.pinned = False
+            self.pinned_roi = None
+            self.snapshot = None
+            self.follow_input = False
         if self.pinned:
             return
         shape_changed = self.source is None or self.source.shape[:2] != image.shape[:2]
@@ -333,6 +357,21 @@ class SurfaceLab(QtWidgets.QWidget):
             self.result_view.clear_rois("analysis")
         if not self.native_inflight:
             self.submit()
+
+    def use_input_source(self):
+        """Explicitly release a loaded file and rejoin the application's source."""
+        self.worker.invalidate()
+        self.follow_input = True
+        self.pinned = False
+        self.pinned_roi = None
+        self.native_inflight = False
+        self.source = None
+        self.source_metadata = {}
+        self.snapshot = None
+        self.original.clear_image()
+        self.result_view.clear_image()
+        self.status.setText("Waiting for input source…")
+        self.inputSourceRequested.emit()
 
     @staticmethod
     def _display_source(image):
@@ -429,10 +468,6 @@ class SurfaceLab(QtWidgets.QWidget):
         except (OSError, ValueError, cv2.error) as exc:
             self.status.setText(f"Cannot open image: {exc}")
             return
-        self.worker.invalidate()
-        self.native_inflight = False
-        self.pinned = False
-        self.snapshot = None
         self.set_image(image, {"source_filename": path})
 
     def export(self):
@@ -451,10 +486,12 @@ class SurfaceLab(QtWidgets.QWidget):
             roi=request["roi"],
             processing_shape=list(image.shape),
             native_resolution=request["native"],
+            spatial_scale=request.get("spatial_scale", 1.0),
             method_id=request["method_id"],
             parameters=request["parameters"],
             display_settings=request["settings"],
         )
+        metadata.update(self.experiment_metadata(request["method_id"], request["parameters"]))
         try:
             export_surface(
                 path,
@@ -478,7 +515,9 @@ class SurfaceLab(QtWidgets.QWidget):
                         "method_id": self.method.currentData(),
                         "parameters": self.params.values(),
                         "display_settings": self.settings(),
+                        **self.experiment_metadata(self.method.currentData(), self.params.values()),
                     },
+                    method_registry=self.method_registry,
                 )
             except Exception as exc:  # noqa: BLE001
                 self.status.setText(f"Preset error: {exc}")
@@ -488,12 +527,12 @@ class SurfaceLab(QtWidgets.QWidget):
         if not path:
             return
         try:
-            config = load_preset(path)
-            info = next(i for i in surface_registry.infos() if i.id == config["method_id"])
+            config = load_preset(path, method_registry=self.method_registry)
+            info = next(i for i in self.method_registry.infos() if i.id == config["method_id"])
             params, settings = config["parameters"], config["display_settings"]
             if set(params) != set(info.parameters):
                 raise ValueError("Preset parameters do not match method schema")
-            surface_registry.create(info.id, **params)
+            self.method_registry.create(info.id, **params)
             self._updating = True
             self.family.setCurrentText(info.category)
             self._family_changed()
@@ -523,6 +562,10 @@ class SurfaceLab(QtWidgets.QWidget):
         except Exception as exc:  # noqa: BLE001
             self._updating = False
             self.status.setText(f"Preset error: {exc}")
+
+    def experiment_metadata(self, method_id, parameters):
+        """Additional recipe metadata for specialised workspaces."""
+        return {}
 
     def shutdown(self):
         return self.worker.stop()
