@@ -14,6 +14,7 @@ from defleco_lab.processing.surface import normalize_input, surface_registry
 from .image_viewer import ImageViewer
 from .parameter_panel import ParameterPanel
 from .surface_io import export_surface, load_preset, render_surface, save_preset
+from .visualization import COLORMAPS
 
 
 class SurfaceWorker(QtCore.QThread):
@@ -200,8 +201,18 @@ class SurfaceLab(QtWidgets.QWidget):
         self.mode.addItems(["enhanced", "grayscale", "heatmap", "overlay"])
         self.range_mode.addItems(["auto", "fixed", "percentile"])
         self.polarity.addItems(["signed", "bright", "dark", "absolute"])
+        self.overlay_base = QtWidgets.QComboBox()
+        self.overlay_base.addItems(["enhanced", "original"])
+        self.colormap = QtWidgets.QComboBox()
+        self.colormap.addItems(COLORMAPS)
+        self.overlay_base.setToolTip(
+            "Background for Output = overlay and Surface screening heatmap exports."
+        )
+        self.colormap.setToolTip("Heatmap palette for Surface LAB and Surface screening.")
         form.addRow("Output", self.mode)
         form.addRow("Range", self.range_mode)
+        form.addRow("Heatmap palette", self.colormap)
+        form.addRow("Overlay background", self.overlay_base)
         self.low, self.high = self._number(-1e9, 1e9, 0), self._number(-1e9, 1e9, 1)
         self.percentile_low, self.percentile_high = (
             self._number(0, 100, 1),
@@ -214,7 +225,7 @@ class SurfaceLab(QtWidgets.QWidget):
             ("Percentile low", self.percentile_low),
             ("Percentile high", self.percentile_high),
             ("Polarity", self.polarity),
-            ("Opacity", self.opacity),
+            ("Heatmap opacity", self.opacity),
         ]:
             form.addRow(label, widget)
         for label, callback in [
@@ -244,7 +255,7 @@ class SurfaceLab(QtWidgets.QWidget):
         self.family.currentIndexChanged.connect(self._family_changed)
         self.method.currentIndexChanged.connect(self._method_changed)
         self.params.parametersChanged.connect(self._changed)
-        for widget in (self.mode, self.range_mode, self.polarity):
+        for widget in (self.mode, self.range_mode, self.polarity, self.overlay_base, self.colormap):
             widget.currentIndexChanged.connect(self._changed)
         for widget in (
             self.low,
@@ -293,6 +304,9 @@ class SurfaceLab(QtWidgets.QWidget):
             "percentile_high": self.percentile_high.value(),
             "polarity": self.polarity.currentText(),
             "opacity": self.opacity.value(),
+            "overlay_base": self.overlay_base.currentText(),
+            "colormap": self.colormap.currentText(),
+            "enhanced_polarity": "signed",
         }
 
     def _changed(self, *_):
@@ -493,10 +507,15 @@ class SurfaceLab(QtWidgets.QWidget):
                 ("mode", self.mode),
                 ("range", self.range_mode),
                 ("polarity", self.polarity),
+                ("overlay_base", self.overlay_base),
+                ("colormap", self.colormap),
             ]:
-                if widget.findText(settings[key]) < 0:
+                value = settings.get(
+                    key, {"overlay_base": "original", "colormap": "Turbo"}.get(key)
+                )
+                if widget.findText(value) < 0:
                     raise ValueError(f"Invalid {key}")
-                widget.setCurrentText(settings[key])
+                widget.setCurrentText(value)
             for key in ("low", "high", "percentile_low", "percentile_high", "opacity"):
                 getattr(self, key).setValue(float(settings[key]))
             self._updating = False

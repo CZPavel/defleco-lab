@@ -14,7 +14,7 @@ import numpy as np
 
 from defleco_lab.processing.base import ProcessingResult
 
-from .visualization import RangeMode, VisualizationSettings, VisualizationTransform
+from .visualization import COLORMAPS, RangeMode, VisualizationSettings, VisualizationTransform
 
 
 def _settings(settings: dict) -> VisualizationSettings:
@@ -27,6 +27,8 @@ def _settings(settings: dict) -> VisualizationSettings:
     enhancement_gain = float(settings.get("enhancement_gain", 1.0))
     if settings.get("overlay_base", "original") not in {"original", "enhanced"}:
         raise ValueError("Unknown overlay base")
+    if settings.get("colormap", "Turbo") not in COLORMAPS:
+        raise ValueError("Unknown heatmap palette")
     if settings.get("enhanced_polarity", "signed") not in {"signed", "bright", "dark", "absolute"}:
         raise ValueError("Unknown enhanced polarity")
     if not np.isfinite(enhancement_gain) or not 0 <= enhancement_gain <= 4:
@@ -48,6 +50,7 @@ def _settings(settings: dict) -> VisualizationSettings:
         manual_minimum=low,
         manual_maximum=high,
         heatmap=settings.get("mode", "grayscale") in {"heatmap", "overlay"},
+        colormap=settings.get("colormap", "Turbo"),
         overlay_alpha=1.0,
     )
 

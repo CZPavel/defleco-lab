@@ -70,11 +70,16 @@ def test_surface_capture_requires_basler_and_fresh_owned_packet(tmp_path, monkey
         camera = window.camera_worker = FakeCamera()
         captured = []
         monkeypatch.setattr(window, "_start_surface_worker", captured.append)
+        window.surface_lab.colormap.setCurrentText("Viridis")
+        window.surface_lab.opacity.setValue(0.25)
+        window.surface_lab.overlay_base.setCurrentText("enhanced")
         window._run_capture_experiment(config)
         assert window.surface_capture_timer.isActive()
         assert window.tabs.currentIndex() == 0
         assert not window.tabs.isTabEnabled(1)
         after = window._surface_capture_request["after_ns"]
+        window.surface_lab.opacity.setValue(0.8)
+        window.surface_lab.overlay_base.setCurrentText("original")
         raw = np.full((16, 17), 32000, np.uint16)
         camera.packets.append(FramePacket(raw, 3, after - 1))
         window._poll_camera_frames()
@@ -84,6 +89,9 @@ def test_surface_capture_requires_basler_and_fresh_owned_packet(tmp_path, monkey
         assert len(captured) == 1
         parent, packet, profile, save_response = captured[0].capture
         assert parent == tmp_path and profile == "surface" and save_response
+        assert captured[0].display_settings["opacity"] == 0.25
+        assert captured[0].display_settings["overlay_base"] == "enhanced"
+        assert captured[0].display_settings["colormap"] == "Viridis"
         assert packet.frame_id == 4
         raw[:] = 0
         assert np.all(packet.image == 32000)
@@ -130,6 +138,9 @@ def test_surface_offline_dispatch_uses_selected_options(tmp_path, monkeypatch):
         panel = window.experiment
         panel.profile.setCurrentIndex(panel.profile.findData("surface_extended"))
         panel.surface_npy.setChecked(True)
+        window.surface_lab.colormap.setCurrentText("Magma")
+        window.surface_lab.opacity.setValue(0.37)
+        window.surface_lab.overlay_base.setCurrentText("original")
         captured = []
         monkeypatch.setattr(window, "_start_surface_worker", captured.append)
         window._start_offline_processing(str(tmp_path))
@@ -137,6 +148,9 @@ def test_surface_offline_dispatch_uses_selected_options(tmp_path, monkeypatch):
         assert captured[0].root == tmp_path
         assert captured[0].profile == "surface_extended"
         assert captured[0].save_response is True
+        assert captured[0].display_settings["colormap"] == "Magma"
+        assert captured[0].display_settings["opacity"] == 0.37
+        assert captured[0].display_settings["overlay_base"] == "original"
     finally:
         window.close()
         app.processEvents()
@@ -149,7 +163,9 @@ def test_surface_live_frame_runs_worker_and_enables_gallery(tmp_path, monkeypatc
     window = MainWindow()
     try:
         recipes = surface_screening.build_surface_recipes("surface")
-        monkeypatch.setattr(surface_screening, "build_surface_recipes", lambda _profile: recipes[:1])
+        monkeypatch.setattr(
+            surface_screening, "build_surface_recipes", lambda _profile: recipes[:1]
+        )
         window.source_combo.setCurrentText("Basler")
         camera = window.camera_worker = FakeCamera()
         window._run_capture_experiment({"profile": "surface", "parent": str(tmp_path)})
@@ -160,7 +176,7 @@ def test_surface_live_frame_runs_worker_and_enables_gallery(tmp_path, monkeypatc
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline and not window.experiment.open_results.isEnabled():
             app.processEvents()
-            time.sleep(.01)
+            time.sleep(0.01)
         assert window.experiment.open_results.isEnabled()
         assert "completed" in window.experiment.status.text()
         assert window.tabs.isTabEnabled(1)
@@ -191,7 +207,7 @@ def test_window_close_cancels_and_joins_surface_worker():
         def run(self):
             started.set()
             while not self.isInterruptionRequested():
-                time.sleep(.01)
+                time.sleep(0.01)
             stopped.set()
 
     worker = WaitingWorker(window)

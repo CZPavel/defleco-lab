@@ -845,6 +845,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._surface_capture_request = {
             "parent": parent, "profile": config["profile"],
             "save_response": bool(config.get("save_response", False)),
+            "display_settings": self.surface_lab.settings(),
             "after_ns": perf_counter_ns(), "camera": self.camera_worker,
         }
         self.experiment.set_results_path("")
@@ -886,6 +887,7 @@ class MainWindow(QtWidgets.QMainWindow):
         worker = SurfaceScreeningWorker(
             None, self, capture=(request["parent"], packet.copy_owned(), request["profile"],
                                  request["save_response"]),
+            display_settings=request["display_settings"],
         )
         self._start_surface_worker(worker)
 
@@ -1101,7 +1103,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 profile = manifest["profile"]
             self.experiment.set_results_path("")
             worker = SurfaceScreeningWorker(
-                root, self, profile=profile, save_response=config["save_response"]
+                root, self, profile=profile, save_response=config["save_response"],
+                display_settings=self.surface_lab.settings(),
             )
             self._start_surface_worker(worker)
             return

@@ -1,3 +1,4 @@
+import json
 import os
 import time
 
@@ -8,6 +9,28 @@ from PySide6 import QtWidgets
 
 from defleco_lab.gui.main_window import MainWindow
 from defleco_lab.gui.surface_lab import SurfaceLab
+
+
+def test_manual_and_screening_share_enhanced_background_for_absolute_heatmap():
+    from defleco_lab.gui.surface_io import render_surface
+    from defleco_lab.processing.base import ProcessingResult
+
+    application = app()
+    lab = SurfaceLab()
+    try:
+        lab.mode.setCurrentText("overlay")
+        lab.polarity.setCurrentText("absolute")
+        lab.range_mode.setCurrentText("fixed")
+        source = np.full((1, 3), 0.5, np.float32)
+        result = ProcessingResult(np.array([[-0.1, 0.0, 0.1]], np.float32))
+        settings = lab.settings()
+        assert settings["enhanced_polarity"] == "signed"
+        manual = render_surface(source, result, settings)
+        screening = render_surface(source, result, settings | {"enhanced_polarity": "signed"})
+        np.testing.assert_array_equal(manual, screening)
+    finally:
+        assert lab.shutdown()
+        application.processEvents()
 
 
 def app():
@@ -69,6 +92,63 @@ def test_surface_tab_does_not_submit_legacy_processing():
         assert not called
     finally:
         window.close()
+        application.processEvents()
+
+
+def test_surface_heatmap_controls_and_old_preset_compatibility(tmp_path, monkeypatch):
+    application = app()
+    lab = SurfaceLab()
+    try:
+        assert lab.settings()["overlay_base"] == "enhanced"
+        assert lab.settings()["colormap"] == "Turbo"
+        lab.overlay_base.setCurrentText("original")
+        lab.colormap.setCurrentText("Viridis")
+        lab.opacity.setValue(0.35)
+        assert (
+            lab.settings()["overlay_base"],
+            lab.settings()["colormap"],
+            lab.settings()["opacity"],
+        ) == ("original", "Viridis", 0.35)
+
+        new_path = tmp_path / "new-preset.json"
+        monkeypatch.setattr(
+            QtWidgets.QFileDialog, "getSaveFileName", lambda *args: (str(new_path), "")
+        )
+        lab.save_preset()
+        saved = json.loads(new_path.read_text(encoding="utf-8"))
+        assert saved["display_settings"]["overlay_base"] == "original"
+        assert saved["display_settings"]["colormap"] == "Viridis"
+        lab.overlay_base.setCurrentText("enhanced")
+        lab.colormap.setCurrentText("Magma")
+        monkeypatch.setattr(
+            QtWidgets.QFileDialog, "getOpenFileName", lambda *args: (str(new_path), "")
+        )
+        lab.load_preset()
+        assert lab.overlay_base.currentText() == "original"
+        assert lab.colormap.currentText() == "Viridis"
+
+        old_settings = lab.settings()
+        del old_settings["overlay_base"]
+        del old_settings["colormap"]
+        path = tmp_path / "old-preset.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "method_id": lab.method.currentData(),
+                    "parameters": lab.params.values(),
+                    "display_settings": old_settings,
+                }
+            ),
+            encoding="utf-8",
+        )
+        lab.overlay_base.setCurrentText("enhanced")
+        monkeypatch.setattr(QtWidgets.QFileDialog, "getOpenFileName", lambda *args: (str(path), ""))
+        lab.load_preset()
+        assert lab.overlay_base.currentText() == "original"
+        assert lab.colormap.currentText() == "Turbo"
+        assert lab.opacity.value() == 0.35
+    finally:
+        assert lab.shutdown()
         application.processEvents()
 
 

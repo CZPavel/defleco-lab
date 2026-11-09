@@ -13,6 +13,11 @@ Status legend:
 
 ## Surface Enhancement LAB — 2026-11-09
 
+- [x] Surface heatmap controls include the enhanced or original overlay base;
+      screening snapshots the shared display settings for reproducible exports.
+- [x] Screening image names carry method identity when collected outside their
+      result folders; see the [full functionality overview](functionality-overview.md).
+
 - [x] Surface screening profiles: all standard filters or standard plus boosted,
       one fresh owned live frame, sequential full-resolution background processing.
 - [x] Enhanced and enhanced-background heatmap exports, optional NPY, versioned

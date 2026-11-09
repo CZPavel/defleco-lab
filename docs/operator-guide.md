@@ -239,3 +239,39 @@ recipe.
 **Extended screening** additionally reuses more families from the standalone V02
 generator and slower processing recipes. Run it only after Quick screening confirms
 that the display/camera geometry and pattern scale are sensible.
+
+## Surface LAB and static-light screening
+
+For static illumination, open **Surface LAB** to view the processed image alone,
+or **Surface Compare** for synchronized original/result views. Both tabs share
+the selected method, parameters and result. Select a filter family and method,
+then choose enhanced image, grayscale response, heatmap or overlay. The heatmap
+controls select the original or enhanced image as the overlay base, the colormap,
+response polarity, auto/fixed/percentile range and opacity. The enhanced base is
+selected by default. Algorithm polarity affects the calculation; display polarity
+and the heatmap controls affect only visualization.
+
+The normal preview processes at most one megapixel. Draw an Analysis ROI and use
+**Process native ROI**, or select **Process full resolution**, to request native
+resolution. The native result remains pinned until **Resume preview**. PNG/TIFF
+export, an optional float32 NPY response and a JSON sidecar are available, along
+with save/load for method and display presets. Presets written before the overlay
+base and colormap controls retain their original-base/Turbo behavior when loaded.
+
+To compare the entire Surface registry on the same live frame, select **Surface
+screening** (50 standard variants) or **Surface screening Extended** (standard and
+boosted, 100 variants) in **Screening experiment → Plan**. Choose an existing
+parent folder, start Basler Live and press **Run Surface screening**. The app waits
+for one fresh frame and processes it in the background at native resolution without
+changing the pattern output. The shared Surface heatmap controls are snapshotted at
+the start and used for each second image; standard and boosted variants share the
+standard response's resolved display range.
+
+Each variant writes Enhanced and heatmap-overlay PNGs, plus JSON and optional NPY.
+Names include the run, method and variant so individual images remain identifiable
+when gathered into one folder. Stop preserves completed results and their gallery.
+Use **Open results** to browse them, or **Process existing capture...** to repeat
+a stored Surface capture without the camera; each repeat gets a new results folder.
+See the [Surface filter catalogue](surface-filters.md) and the
+[Surface screening recipe reference](surface-screening.md) for normalization,
+algorithm limits, boost values and the bounds of physical verification.

@@ -391,7 +391,8 @@ def _save_response_variants(
 ) -> dict[str, Any]:
     target = root / "processed" / str(record["group_id"]) / recipe.recipe_id
     target.mkdir(parents=True, exist_ok=True)
-    stem = f"{record['case_id']}__{recipe.recipe_id}"
+    run_id = root.name.removeprefix("Defleco_screening_")
+    stem = f"{run_id}__{record['case_id']}__{recipe.method_id}__{recipe.recipe_id}"
 
     npy_path = target / f"{stem}__response.npy"
     np.save(npy_path, np.asarray(response, dtype=np.float32))

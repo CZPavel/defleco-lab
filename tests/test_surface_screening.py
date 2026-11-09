@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -56,10 +57,14 @@ def test_complete_sweep_saves_correct_source_and_outputs(tmp_path, profile, dtyp
     assert result["status"] == "completed"
     assert result["total"] == len(result["outputs"]) == count
     assert len(list(result_path.parent.rglob("*.png"))) == count * 2
-    raw = cv2.imdecode(np.fromfile(root / "original.png", np.uint8), cv2.IMREAD_UNCHANGED)
+    raw = cv2.imdecode(
+        np.fromfile(root / read(root / "capture_manifest.json")["original"], np.uint8),
+        cv2.IMREAD_UNCHANGED,
+    )
     np.testing.assert_array_equal(raw, before)
     assert result["input"]["input_dtype"] == str(dtype().dtype)
     assert (result_path.parent / "screening_results.html").is_file()
+    filenames = []
     for row in result["outputs"]:
         assert row["status"] == "completed"
         response = np.load(result_path.parent / row["response_file"], allow_pickle=False)
@@ -71,8 +76,12 @@ def test_complete_sweep_saves_correct_source_and_outputs(tmp_path, profile, dtyp
         assert metadata["display_settings"]["overlay_base"] == "enhanced"
         assert metadata["display_settings"]["opacity"] == 0.5
         for image_file in row["images"].values():
+            name = Path(image_file).name
+            assert row["method_id"] in name and row["variant"] in name
+            filenames.append(name)
             decoded = cv2.imdecode(np.fromfile(result_path.parent / image_file, np.uint8), 1)
             assert decoded.shape[:2] == before.shape[:2]
+    assert len(set(filenames)) == count * 2  # flattening must never overwrite a method/variant
     if count == 100:
         for index in range(0, count, 2):
             first, second = result["outputs"][index : index + 2]
@@ -94,6 +103,88 @@ def test_rerun_does_not_overwrite_and_optional_response(tmp_path):
     assert read(second)["status"] == "cancelled"
     assert read(second)["profile"] == "surface_extended"
     assert (first.parent / "screening_results.html").exists()
+
+
+def test_flattened_reruns_have_unique_names_and_old_captures_still_load(tmp_path, monkeypatch):
+    root = screening.create_surface_workspace(tmp_path, packet(), "surface")
+    capture = read(root / "capture_manifest.json")
+    (root / capture["original"]).rename(root / "original.png")
+    capture["original"] = "original.png"
+    capture.pop("display_settings")
+    (root / "capture_manifest.json").write_text(json.dumps(capture), encoding="utf-8")
+    recipe = screening.build_surface_recipes()[0]
+    monkeypatch.setattr(screening, "build_surface_recipes", lambda profile: [recipe])
+    first = screening.process_surface_workspace(root)
+    second = screening.process_surface_workspace(root)
+    names = [p.name for run in (first.parent, second.parent) for p in run.rglob("*.png")]
+    assert len(names) == len(set(names)) == 4
+    assert read(first)["requested_display_settings"]["opacity"] == 0.5
+    assert read(first)["outputs"][0]["display_settings"]["polarity"] == "absolute"
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [
+        {
+            "range": "fixed",
+            "low": -0.2,
+            "high": 0.3,
+            "polarity": "signed",
+            "colormap": "Inferno",
+            "opacity": 0.0,
+            "overlay_base": "enhanced",
+        },
+        {
+            "range": "percentile",
+            "percentile_low": 10.0,
+            "percentile_high": 90.0,
+            "polarity": "absolute",
+            "colormap": "Viridis",
+            "opacity": 0.8,
+            "overlay_base": "original",
+        },
+    ],
+)
+def test_custom_heatmap_settings_saved_and_shared_between_variants(tmp_path, monkeypatch, settings):
+    recipes = [
+        r
+        for r in screening.build_surface_recipes("surface_extended")
+        if r["method_id"] == "surface_dog"
+    ]
+    monkeypatch.setattr(screening, "build_surface_recipes", lambda profile: recipes)
+    root = screening.create_surface_workspace(
+        tmp_path, packet(), "surface_extended", display_settings=settings
+    )
+    result_path = screening.process_surface_workspace(root)
+    result = read(result_path)
+    assert result["status"] == "completed"
+    for row in result["outputs"]:
+        display = row["display_settings"]
+        for key in ("polarity", "colormap", "opacity", "overlay_base"):
+            assert display[key] == settings[key]
+    standard, boosted = result["outputs"]
+    for key in ("low", "high"):
+        assert standard["display_settings"][key] == boosted["display_settings"][key]
+        if settings["range"] == "fixed":
+            assert standard["display_settings"][key] == settings[key]
+    if settings["opacity"] == 0:
+        for row in result["outputs"]:
+            decoded = [
+                cv2.imdecode(np.fromfile(result_path.parent / image, np.uint8), 1)
+                for image in row["images"].values()
+            ]
+            np.testing.assert_array_equal(*decoded)
+
+
+def test_worker_snapshots_settings_and_palette_validation(tmp_path):
+    settings = {"opacity": 0.2, "colormap": "Magma"}
+    worker = screening.SurfaceScreeningWorker(tmp_path, display_settings=settings)
+    settings["opacity"] = 0.9
+    assert worker.display_settings["opacity"] == 0.2
+    with pytest.raises(ValueError, match="palette"):
+        screening.create_surface_workspace(
+            tmp_path, packet(), display_settings={"colormap": "unknown"}
+        )
 
 
 def test_stop_between_methods_keeps_partial_results(tmp_path):

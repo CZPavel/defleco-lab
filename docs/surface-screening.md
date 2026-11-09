@@ -36,13 +36,27 @@ HTML gallery with family/method/variant filters. Each completed variant contains
 Enhanced and Enhanced + heatmap PNGs plus JSON metadata; optional NPY retains
 the unmodified float32 numerical response. Result PNGs use RGB8 display mapping.
 
-The heatmap represents absolute response with standard-variant percentiles 1–99.
-That fixed range is reused for the corresponding boosted response; constant maps
-receive a finite nonzero display interval. Alpha is response-dependent, capped at
-50%. Its enhanced background is identical to the standalone Enhanced export,
-including any display-only enhancement gain. Signed response values remain
-available in the numerical result. The default overlay in manual Surface LAB
-continues to use the original image.
+The heatmap uses the Surface LAB/Surface Compare settings captured at the start of
+the run: overlay base (enhanced or original), colormap, opacity, polarity, range
+mode and associated values. In auto and percentile modes, resolve the display
+range from each method's standard response; use that same fixed range for its
+boosted response. Fixed mode uses the specified range. Constant maps receive a
+finite nonzero display interval. Alpha is response-dependent and capped by the
+selected opacity. When enhanced is selected as the base, it matches the standalone
+Enhanced export, including any display-only enhancement gain. Signed numerical
+response values remain separate from the display mapping.
+
+The enhanced overlay base is the default for a new Surface LAB session. Older
+presets without a base or colormap retain original/Turbo. When the backend processes
+an older Surface capture without stored settings and no explicit settings are
+provided, it uses the earlier absolute response, 1st/99th percentile, 50% opacity,
+enhanced-base rendering. A GUI offline rerun snapshots the settings selected in
+Surface LAB/Compare when it starts, including for an older capture.
+
+Each derived-result filename includes the run identifier, method ID, standard/boosted
+variant and output type. The two PNGs, optional NPY and JSON sidecar can therefore
+be moved into a single folder while retaining their identities. Deflectometry
+screening filenames likewise retain case, recipe and method identification.
 
 ## Execution and failure behavior
 

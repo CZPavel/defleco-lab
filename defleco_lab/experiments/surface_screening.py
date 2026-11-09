@@ -5,6 +5,7 @@ from __future__ import annotations
 import html
 import json
 from collections.abc import Callable
+from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -14,12 +15,30 @@ import numpy as np
 from PySide6 import QtCore
 
 from defleco_lab.camera.frame_packet import FramePacket
-from defleco_lab.gui.surface_io import render_surface
+from defleco_lab.gui.surface_io import _response, _settings, render_surface
+from defleco_lab.processing.base import ProcessingResult
 from defleco_lab.processing.surface import normalize_input, surface_registry
 
 CAPTURE_SCHEMA = "defleco.surface.screening.capture.v1"
 RECIPE_VERSION = "surface-screening.v1"
 PROFILES = {"surface", "surface_extended"}
+DEFAULT_DISPLAY = {
+    "range": "percentile",
+    "percentile_low": 1.0,
+    "percentile_high": 99.0,
+    "polarity": "absolute",
+    "opacity": 0.5,
+    "overlay_base": "enhanced",
+    "colormap": "Turbo",
+    "enhanced_polarity": "signed",
+}
+
+
+def _display_settings(settings):
+    configured = DEFAULT_DISPLAY | deepcopy(settings or {})
+    _settings(configured)
+    _response(ProcessingResult(np.zeros((1, 1), np.float32)), configured)
+    return configured
 
 
 def _timestamp() -> str:
@@ -58,15 +77,22 @@ def _write_png(path: Path, image: np.ndarray, *, rgb: bool = False) -> None:
 
 
 def create_surface_workspace(
-    parent: Path, packet: FramePacket, profile: str = "surface", save_response: bool = False
+    parent: Path,
+    packet: FramePacket,
+    profile: str = "surface",
+    save_response: bool = False,
+    *,
+    display_settings: dict | None = None,
 ) -> Path:
     """Save an owned, unmodified image once; caller establishes frame freshness."""
     if profile not in PROFILES:
         raise ValueError(f"Unknown Surface profile: {profile}")
+    display_settings = _display_settings(display_settings)
     image = np.array(packet.image, copy=True)
     _, input_info = normalize_input(image)  # validates supported type, finite data and shape
     root = _unique_directory(Path(parent).expanduser(), "Surface_screening")
-    raw = root / ("original.png" if image.dtype in (np.uint8, np.uint16) else "original.npy")
+    extension = ".png" if image.dtype in (np.uint8, np.uint16) else ".npy"
+    raw = root / f"{root.name}__original{extension}"
     if raw.suffix == ".png":
         _write_png(raw, image)
     else:
@@ -78,6 +104,7 @@ def create_surface_workspace(
             "schema": CAPTURE_SCHEMA,
             "profile": profile,
             "save_response": bool(save_response),
+            "display_settings": display_settings,
             "status": "captured",
             "original": raw.name,
             "source_shape": list(image.shape),
@@ -145,7 +172,13 @@ def _read_capture(root: Path) -> tuple[dict[str, Any], np.ndarray]:
     if payload.get("schema") != CAPTURE_SCHEMA or payload.get("status") != "captured":
         raise ValueError("Not a completed Surface screening capture")
     original = payload.get("original", "")
-    if original not in {"original.png", "original.npy"}:
+    original_path = Path(original)
+    if (
+        not original
+        or original_path.name != original
+        or original_path.suffix not in {".png", ".npy"}
+        or not (original_path.stem == "original" or original_path.stem.endswith("__original"))
+    ):
         raise ValueError("Invalid Surface original file")
     path = root / original
     if path.suffix == ".npy":
@@ -163,8 +196,19 @@ def _read_capture(root: Path) -> tuple[dict[str, Any], np.ndarray]:
     return payload, image
 
 
-def _range(response: np.ndarray) -> tuple[float, float]:
-    low, high = (float(x) for x in np.percentile(np.abs(response), [1, 99]))
+def _range(response: np.ndarray, settings: dict) -> tuple[float, float]:
+    values = _response(ProcessingResult(response), settings)
+    if settings["range"] == "fixed":
+        return float(settings.get("low", 0)), float(settings.get("high", 1))
+    if settings["range"] == "auto":
+        low, high = float(values.min()), float(values.max())
+    else:
+        low, high = (
+            float(x)
+            for x in np.percentile(
+                values, [settings["percentile_low"], settings["percentile_high"]]
+            )
+        )
     if high <= low:
         high = low + 1.0
     return low, high
@@ -222,12 +266,16 @@ def process_surface_workspace(
     *,
     profile: str | None = None,
     save_response: bool | None = None,
+    display_settings: dict | None = None,
 ) -> Path:
     """Run each filter sequentially; retain completed entries on cancellation/error."""
     root = Path(root)
     capture, image = _read_capture(root)
     profile = profile or capture["profile"]
     save_response = capture["save_response"] if save_response is None else bool(save_response)
+    configured_display = _display_settings(
+        capture.get("display_settings") if display_settings is None else display_settings
+    )
     recipes = build_surface_recipes(profile)
     normalized, input_info = normalize_input(image)
     run = _unique_directory(root, "run")
@@ -242,6 +290,7 @@ def process_surface_workspace(
         "profile": profile,
         "recipe_version": RECIPE_VERSION,
         "save_response": save_response,
+        "requested_display_settings": configured_display,
         "status": "running",
         "total": len(recipes),
         "outputs": [],
@@ -253,11 +302,12 @@ def process_surface_workspace(
     last_method = None
     entry = None
     target = None
+    sidecar_name = None
 
     def record_method_error(current, destination, message):
         destination.mkdir(parents=True, exist_ok=True)
         current.update(status="error", error=message)
-        _write_json(destination / "result.json", current)
+        _write_json(destination / Path(current["sidecar"]).name, current)
         manifest["outputs"].append(current)
         _write_json(manifest_path, manifest)
 
@@ -268,24 +318,21 @@ def process_surface_workspace(
                 break
             target = run / recipe["method_id"] / recipe["variant"]
             rel = target.relative_to(run).as_posix()
+            stem = f"{run.name}__{recipe['method_id']}__{recipe['variant']}"
+            enhanced_name = f"{stem}__enhanced.png"
+            overlay_name = f"{stem}__enhanced_heatmap.png"
+            response_name = f"{stem}__response.npy"
+            sidecar_name = f"{stem}__result.json"
             entry = dict(
                 recipe,
                 status="pending",
                 input=input_info,
                 frame=capture["frame"],
                 source_original=manifest["source_original"],
-                sidecar=f"{rel}/result.json",
+                sidecar=f"{rel}/{sidecar_name}",
                 processing_time_ms=None,
-                display_settings={
-                    "range": "standard_percentile_1_99",
-                    "low": None,
-                    "high": None,
-                    "polarity": "absolute",
-                    "opacity": 0.5,
-                    "overlay_base": "enhanced",
-                    "enhanced_polarity": "signed",
-                    "enhancement_gain": recipe["enhancement_gain"],
-                },
+                display_settings=configured_display
+                | {"enhancement_gain": recipe["enhancement_gain"]},
             )
             if progress:
                 progress(index, len(recipes), f"{recipe['method_name']} / {recipe['variant']}")
@@ -300,7 +347,9 @@ def process_surface_workspace(
                         recipe["method_id"], **recipe["parameters"]
                     ).process([normalized], keep_intermediates=True)
                     if recipe["variant"] == "standard":
-                        baseline_range[recipe["method_id"]] = _range(result.primary)
+                        baseline_range[recipe["method_id"]] = _range(
+                            result.primary, configured_display
+                        )
                         if recipe["method_id"] in {"surface_equalize", "surface_stretch"}:
                             baseline_result = result
                 result.intermediates["_source_normalized"] = normalized
@@ -316,13 +365,11 @@ def process_surface_workspace(
                 )
                 continue
             low, high = baseline_range[recipe["method_id"]]
-            base_settings = {
+            base_settings = configured_display | {
+                "mode": "overlay",
                 "range": "fixed",
                 "low": low,
                 "high": high,
-                "polarity": "absolute",
-                "opacity": 0.5,
-                "overlay_base": "enhanced",
                 "enhanced_polarity": "signed",
                 "enhancement_gain": recipe["enhancement_gain"],
             }
@@ -336,10 +383,10 @@ def process_surface_workspace(
                 record_method_error(entry, target, f"{type(exc).__name__}: {exc}")
                 continue
             target.mkdir(parents=True)
-            _write_png(target / "enhanced.png", enhanced, rgb=True)
-            _write_png(target / "enhanced_heatmap.png", overlay, rgb=True)
+            _write_png(target / enhanced_name, enhanced, rgb=True)
+            _write_png(target / overlay_name, overlay, rgb=True)
             if save_response:
-                with (target / "response.npy").open("xb") as handle:
+                with (target / response_name).open("xb") as handle:
                     np.save(handle, np.asarray(result.primary, np.float32), allow_pickle=False)
             entry.update(
                 status="completed",
@@ -353,14 +400,16 @@ def process_surface_workspace(
                 source_original=manifest["source_original"],
                 display_settings=base_settings,
                 diagnostics=result.diagnostics,
+                enhanced_display_settings=base_settings
+                | {"mode": "enhanced", "polarity": "signed"},
                 images={
-                    "enhanced": f"{rel}/enhanced.png",
-                    "overlay": f"{rel}/enhanced_heatmap.png",
+                    "enhanced": f"{rel}/{enhanced_name}",
+                    "overlay": f"{rel}/{overlay_name}",
                 },
-                response_file=f"{rel}/response.npy" if save_response else None,
-                sidecar=f"{rel}/result.json",
+                response_file=f"{rel}/{response_name}" if save_response else None,
+                sidecar=f"{rel}/{sidecar_name}",
             )
-            _write_json(target / "result.json", entry)
+            _write_json(target / sidecar_name, entry)
             manifest["outputs"].append(entry)
             _write_json(manifest_path, manifest)
             del enhanced, overlay, result
@@ -383,7 +432,7 @@ def process_surface_workspace(
                     p.relative_to(run).as_posix() for p in target.iterdir() if p.is_file()
                 ]
                 try:
-                    _write_json(target / "result.json", entry)
+                    _write_json(target / sidecar_name, entry)
                 except OSError:
                     entry["sidecar"] = None
             else:
@@ -409,12 +458,14 @@ class SurfaceScreeningWorker(QtCore.QThread):
         profile=None,
         save_response=None,
         capture=None,
+        display_settings=None,
     ) -> None:
         super().__init__(parent)
         if (root is None) == (capture is None):
             raise ValueError("Provide exactly one of root or capture")
         self.root = Path(root) if root is not None else None
         self.profile, self.save_response, self.capture = profile, save_response, capture
+        self.display_settings = deepcopy(display_settings)
 
     def cancel(self) -> None:
         self.requestInterruption()
@@ -423,7 +474,9 @@ class SurfaceScreeningWorker(QtCore.QThread):
         try:
             if self.capture is not None:
                 try:
-                    self.root = create_surface_workspace(*self.capture)
+                    self.root = create_surface_workspace(
+                        *self.capture, display_settings=self.display_settings
+                    )
                 finally:
                     self.capture = None
             assert self.root is not None
@@ -433,6 +486,7 @@ class SurfaceScreeningWorker(QtCore.QThread):
                 self.isInterruptionRequested,
                 profile=self.profile,
                 save_response=self.save_response,
+                display_settings=self.display_settings,
             )
             self.completed.emit(str(path))
         except Exception as exc:  # noqa: BLE001 - exceptions must reach the GUI
