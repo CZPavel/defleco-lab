@@ -41,6 +41,46 @@ frame requirement, help, limitations, references, editable parameters, and optio
 parameter-visibility dependencies. Changing an output therefore exposes only the
 controls relevant to that output.
 
+## Surface Enhancement LAB
+
+The static-light workspace uses its own `MethodRegistry` with the existing
+`ProcessingMethod` / `MethodInfo` / `ProcessingResult` contracts. It does not add
+single-frame surface methods to the established deflectometry selector. Acquisition
+continues through the same owned `FramePacket` source; image sequences retain the
+original filename as packet metadata. `main_window.py` only forwards current frames
+and coordinates workspace visibility/shutdown.
+
+Surface processing runs in a separate bounded latest-wins Qt worker. It normalizes
+the complete source before ROI cropping so float min/max normalization does not
+change between ROI and full-frame processing. Preview can reduce resolution but
+never increases it. Native ROI/full-resolution calculations are explicit. Numeric
+float32 output and optional normalized enhanced image remain separate from the
+RGB8 presentation, export and JSON configuration. The worker snapshots source,
+method, parameters, ROI and display settings together to keep exports reproducible.
+
+Surface display mapping reuses `VisualizationTransform`; overlay transparency is
+weighted by displayed response strength. The sidecar records processing/source shape,
+source intensity metadata, method diagnostics, ROI and visualization configuration.
+PNG/TIFF hold display images, while optional NPY holds the numerical response.
+
+## GPixel Surface Fusion
+
+Fusion reuses the Surface workspace and bounded worker with an injected registry;
+it does not register K01–K07 in either existing method selector. A small shared
+kernel module holds the existing float-domain filter equations, while Fusion
+recipes assemble sequential or independent branches. Signed intermediate arrays
+bypass source normalization. Fusion's exact float median is distinct from the
+legacy Surface median's quantized background, preserving the existing outputs.
+
+The worker normalizes the full source, crops the ROI and reduces preview pixels,
+then passes the actual spatial scale to Fusion so parameters retain native-pixel
+meaning. Numerical response, enhanced image and display mapping remain separate.
+Recipe version, step configuration, weights, normalization, effective scale and
+clipping diagnostics accompany existing source/ROI/export metadata. An explicitly
+opened file is retained until Use input source; only the visible workspace
+processes incoming frames. The limited selected-image screening profile reuses
+the existing capture/processing/export/gallery path for seven recommended recipes.
+
 ## Pattern output
 
 The physical pattern generator is part of the same application but remains

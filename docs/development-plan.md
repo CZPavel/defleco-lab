@@ -11,6 +11,50 @@ Status legend:
 - [~] implemented as a usable first version, still needs physical validation/refinement
 - [ ] planned / not implemented yet
 
+## GPixel Surface Fusion — 2026-11-09
+
+- [x] Independent linked Original/Result tab with K01–K07, per-step controls,
+      intensity, response views, default reset, presets and reproducible export.
+- [x] Shared float-domain Surface kernels; signed residual intermediates avoid
+      source renormalization. K07 normalizes branches before weighted/max fusion.
+- [x] Native-pixel preview parameter scaling and exact float median for Fusion;
+      original Surface method behavior retained.
+- [x] Seven-recipe selected-image screening through the existing worker/gallery.
+- [ ] Real-image evaluation of visibility, halos, noise and parameter robustness;
+      recommended defaults and weights remain hypotheses, not optima.
+
+See [GPixel Surface Fusion](gpixel-surface-fusion.md) for first K01/K07 use,
+normalization, parameters, performance limits and metadata.
+
+## Surface Enhancement LAB — 2026-11-09
+
+- [x] Surface heatmap controls include the enhanced or original overlay base;
+      screening snapshots the shared display settings for reproducible exports.
+- [x] Screening image names carry method identity when collected outside their
+      result folders; see the [full functionality overview](functionality-overview.md).
+
+- [x] Surface screening profiles: all standard filters or standard plus boosted,
+      one fresh owned live frame, sequential full-resolution background processing.
+- [x] Enhanced and enhanced-background heatmap exports, optional NPY, versioned
+      recipes, incremental results and HTML gallery, cancellation and offline reruns.
+      See [surface-screening.md](surface-screening.md).
+
+- [x] Surface Compare shows original/result side by side; Surface LAB shows only
+      the filtered result. Both reuse one workspace, settings and worker.
+
+- [x] Independent two-view static-light workspace using existing source paths,
+      viewer, parameter schema and processing plug-in contracts.
+- [x] Surface filter families A–H, documented in [surface-filters.md](surface-filters.md).
+- [x] Bounded background processing, reduced preview, explicit native ROI/full frame.
+- [x] Separate numeric response and enhanced/grayscale/heatmap/transparent-overlay display.
+- [x] Non-overwriting PNG/TIFF + JSON export and optional float32 NPY; JSON presets.
+- [x] Python 3.11 Windows environment updated with scikit-image ridge-filter support.
+- [ ] Evaluate actual static-light glossy paint images with manually identified
+      scratches, healthy reference regions and varied glare/illumination.
+- [ ] Select useful parameter ranges from those images; synthetic structure response
+      is software evidence and cannot establish defect visibility or detection accuracy.
+- [ ] Optional wavelet/notch extensions only after a real-image need is established.
+
 ## Current experimental objective
 
 The immediate goal is not calibrated 3D metrology. It is to find combinations of

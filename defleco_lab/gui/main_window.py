@@ -5,7 +5,7 @@ from collections import deque
 from datetime import datetime
 from importlib.resources import files
 from pathlib import Path
-from time import perf_counter
+from time import perf_counter, perf_counter_ns
 
 import cv2
 import numpy as np
@@ -21,10 +21,12 @@ from defleco_lab.runtime.processing_worker import ProcessingRequest, ProcessingW
 from defleco_lab.sessions import AsyncSessionRecorder, load_session, replay_history
 
 from .experiment_panel import ExperimentPanel
+from .fusion_lab import FusionLab
 from .image_viewer import ImageViewer
 from .parameter_panel import ParameterPanel
 from .pattern_output import PatternControlPanel
 from .pipeline_panel import PostprocessingPanel, PreprocessingPanel
+from .surface_lab import SurfaceLab
 from .visualization import VisualizationPanel, VisualizationSettings, VisualizationTransform
 
 
@@ -98,6 +100,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.experiment_timer = QtCore.QTimer(self)
         self.experiment_timer.setInterval(30)
         self.experiment_timer.timeout.connect(self._experiment_poll)
+        self.surface_capture_timer = QtCore.QTimer(self)
+        self.surface_capture_timer.setSingleShot(True)
+        self.surface_capture_timer.setInterval(5000)
+        self.surface_capture_timer.timeout.connect(self._surface_capture_timeout)
+        self._surface_capture_request = None
+        self._surface_tab_states = None
         self.timer = QtCore.QTimer(self)
         self.timer.setInterval(60)
         self.timer.timeout.connect(self._next_frame)
@@ -208,6 +216,21 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self.tabs.addTab(compare, "Compare")
         self.tabs.addTab(self.motion_debug, "Motion Debug")
+        self.surface_lab = SurfaceLab()
+        self.surface_compare_page = QtWidgets.QWidget()
+        self.surface_single_page = QtWidgets.QWidget()
+        for page in (self.surface_compare_page, self.surface_single_page):
+            layout = QtWidgets.QVBoxLayout(page)
+            layout.setContentsMargins(0, 0, 0, 0)
+        self.surface_compare_page.layout().addWidget(self.surface_lab)
+        self.tabs.addTab(self.surface_compare_page, "Surface Compare")
+        self.tabs.addTab(self.surface_single_page, "Surface LAB")
+        self.fusion_lab = FusionLab()
+        self.tabs.addTab(self.fusion_lab, "GPixel Surface Fusion")
+        for workspace in (self.surface_lab, self.fusion_lab):
+            workspace.inputSourceRequested.connect(
+                lambda selected=workspace: self._use_surface_input(selected)
+            )
         self.tabs.currentChanged.connect(self._active_view_changed)
         self.original.pixelHovered.connect(
             lambda x, y, v: self.statusBar().showMessage(f"Pixel x={x}, y={y}, value={v}")
@@ -708,6 +731,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.timer.start()
 
     def _stop(self):
+        if self.surface_capture_timer.isActive():
+            self.surface_capture_timer.stop()
+            self._surface_capture_request = None
+            self._set_surface_screening_lock(False)
+            self.experiment.failed("Camera stopped while waiting for a fresh Surface frame.")
         self.timer.stop()
         self.camera_timer.stop()
         if self.camera_worker is not None:
@@ -749,6 +777,14 @@ class MainWindow(QtWidgets.QMainWindow):
             self._record_stop()
         except (OSError, TimeoutError) as exc:
             self.statusBar().showMessage(f"Recorder shutdown error: {exc}")
+        if not self.fusion_lab.shutdown():
+            self.statusBar().showMessage("Fusion worker did not stop; close postponed")
+            event.ignore()
+            return
+        if not self.surface_lab.shutdown():
+            self.statusBar().showMessage("Surface worker did not stop; close postponed")
+            event.ignore()
+            return
         if not self.processor.stop():
             self.statusBar().showMessage("Processing worker did not stop; close postponed")
             event.ignore()
@@ -757,6 +793,15 @@ class MainWindow(QtWidgets.QMainWindow):
 
     @QtCore.Slot(object)
     def _run_capture_experiment(self, config: dict) -> None:
+        if self._screening_busy():
+            self.experiment.failed("A screening job is already running.")
+            return
+        if str(config.get("profile", "quick")) == "surface_fusion":
+            self._run_fusion_screening(config)
+            return
+        if str(config.get("profile", "quick")) in {"surface", "surface_extended"}:
+            self._run_surface_capture(config)
+            return
         if self.source_combo.currentText() != "Basler":
             self.experiment.failed("Select Basler as Source and start Live acquisition first.")
             return
@@ -794,6 +839,127 @@ class MainWindow(QtWidgets.QMainWindow):
         self.experiment.progress.setValue(0)
         self._write_capture_manifest(status="capturing")
         self._experiment_next_case()
+
+    def _screening_busy(self) -> bool:
+        worker = self._experiment_processing_worker
+        return bool(self.experiment_timer.isActive() or self.surface_capture_timer.isActive()
+                    or (worker is not None and worker.isRunning()))
+
+    def _run_fusion_screening(self, config: dict) -> None:
+        from defleco_lab.camera.frame_packet import FramePacket
+        from defleco_lab.experiments.surface_screening import SurfaceScreeningWorker
+
+        if self.fusion_lab.source is None:
+            self.experiment.failed("Select an image in GPixel Surface Fusion first.")
+            return
+        parent = Path(str(config.get("parent", ""))).expanduser()
+        if not str(config.get("parent", "")).strip() or not parent.is_dir():
+            self.experiment.failed("Choose an existing experiment parent folder.")
+            return
+        metadata = dict(self.fusion_lab.source_metadata)
+        packet = FramePacket.from_metadata(self.fusion_lab.source.copy(), metadata)
+        packet.metadata = metadata
+        worker = SurfaceScreeningWorker(
+            None, self, capture=(parent, packet, "surface_fusion", bool(config.get("save_response", False))),
+            display_settings=self.fusion_lab.settings(),
+        )
+        self.experiment.set_results_path("")
+        self._start_surface_worker(worker)
+
+    def _run_surface_capture(self, config: dict) -> None:
+        if self.source_combo.currentText() != "Basler" or self.camera_worker is None:
+            self.experiment.failed("Select Basler as Source and start Live acquisition first.")
+            return
+        if not self.camera_worker.isRunning():
+            self.experiment.failed("Basler camera is not running. Press Live first.")
+            return
+        parent = Path(str(config.get("parent", ""))).expanduser()
+        if not str(config.get("parent", "")).strip() or not parent.is_dir():
+            self.experiment.failed("Choose an existing experiment parent folder.")
+            return
+        self._surface_capture_request = {
+            "parent": parent, "profile": config["profile"],
+            "save_response": bool(config.get("save_response", False)),
+            "display_settings": self.surface_lab.settings(),
+            "after_ns": perf_counter_ns(), "camera": self.camera_worker,
+        }
+        self.experiment.set_results_path("")
+        self._set_surface_screening_lock(True)
+        self.experiment.set_running(True)
+        self.experiment.update_progress(0, 1, "Waiting for a fresh camera frame (5 s timeout)...")
+        self.surface_capture_timer.start()
+
+    def _surface_capture_timeout(self) -> None:
+        if self._surface_capture_request is not None:
+            self._surface_capture_request = None
+            self._set_surface_screening_lock(False)
+            self.experiment.failed("Timed out waiting for a fresh live camera frame.")
+
+    def _set_surface_screening_lock(self, locked: bool) -> None:
+        if locked and self._surface_tab_states is None:
+            self._surface_tab_states = [self.tabs.isTabEnabled(i) for i in range(self.tabs.count())]
+            self.tabs.setCurrentIndex(0)
+            for i in range(1, self.tabs.count()):
+                self.tabs.setTabEnabled(i, False)
+        elif not locked and self._surface_tab_states is not None:
+            for i, enabled in enumerate(self._surface_tab_states):
+                self.tabs.setTabEnabled(i, enabled)
+            self._surface_tab_states = None
+
+    def _accept_surface_frame(self, packet) -> None:
+        request = self._surface_capture_request
+        if (request is None or self.camera_worker is not request["camera"]
+                or packet.host_timestamp_ns <= request["after_ns"]):
+            return
+        if perf_counter_ns() - request["after_ns"] >= 5_000_000_000:
+            self.surface_capture_timer.stop()
+            self._surface_capture_timeout()
+            return
+        self._surface_capture_request = None
+        self.surface_capture_timer.stop()
+        from defleco_lab.experiments.surface_screening import SurfaceScreeningWorker
+
+        worker = SurfaceScreeningWorker(
+            None, self, capture=(request["parent"], packet.copy_owned(), request["profile"],
+                                 request["save_response"]),
+            display_settings=request["display_settings"],
+        )
+        self._start_surface_worker(worker)
+
+    def _start_surface_worker(self, worker) -> None:
+        self._set_surface_screening_lock(True)
+        self.experiment.set_running(True)
+        self._experiment_processing_worker = worker
+        worker.progressChanged.connect(self.experiment.update_progress)
+        worker.completed.connect(self._surface_processing_complete)
+        worker.failed.connect(self._surface_processing_failed)
+        worker.finished.connect(lambda: self._release_screening_worker(worker))
+        worker.start()
+
+    def _release_screening_worker(self, worker) -> None:
+        if self._experiment_processing_worker is worker:
+            self._experiment_processing_worker = None
+        worker.deleteLater()
+
+    @QtCore.Slot(str)
+    def _surface_processing_complete(self, manifest: str) -> None:
+        path = Path(manifest)
+        gallery = path.parent / "screening_results.html"
+        self.experiment.set_results_path(str(gallery))
+        try:
+            status = json.loads(path.read_text(encoding="utf-8")).get("status", "unknown")
+        except (OSError, ValueError):
+            status = "unknown"
+        self.experiment.set_running(False)
+        self._set_surface_screening_lock(False)
+        self.experiment.status.setText(f"Surface screening: {status}. Results: {gallery}")
+        self.statusBar().showMessage(f"Surface screening: {status}")
+
+    @QtCore.Slot(str)
+    def _surface_processing_failed(self, message: str) -> None:
+        self._set_surface_screening_lock(False)
+        self.experiment.failed(message)
+        self.statusBar().showMessage(f"Surface screening: {message}")
 
     def _experiment_next_case(self) -> None:
         if not self._experiment_cases or self._experiment_root is None:
@@ -954,11 +1120,28 @@ class MainWindow(QtWidgets.QMainWindow):
         if not (root / "capture_manifest.json").exists():
             self.experiment.failed("capture_manifest.json was not found.")
             return
-        if (
-            self._experiment_processing_worker is not None
-            and self._experiment_processing_worker.isRunning()
-        ):
+        if self._screening_busy():
             self.experiment.failed("A screening processing job is already running.")
+            return
+
+        try:
+            manifest = json.loads((root / "capture_manifest.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            self.experiment.failed(f"Invalid capture manifest: {exc}")
+            return
+        if str(manifest.get("profile", "")) in {"surface", "surface_extended", "surface_fusion"}:
+            from defleco_lab.experiments.surface_screening import SurfaceScreeningWorker
+
+            config = self.experiment.config()
+            profile = config["profile"]
+            if profile not in {"surface", "surface_extended", "surface_fusion"}:
+                profile = manifest["profile"]
+            self.experiment.set_results_path("")
+            worker = SurfaceScreeningWorker(
+                root, self, profile=profile, save_response=config["save_response"],
+                display_settings=(self.fusion_lab if profile == "surface_fusion" else self.surface_lab).settings(),
+            )
+            self._start_surface_worker(worker)
             return
 
         self.experiment.set_running(True)
@@ -991,6 +1174,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self._experiment_processing_worker = None
 
     def _stop_experiment(self) -> None:
+        if self.surface_capture_timer.isActive():
+            self.surface_capture_timer.stop()
+            self._surface_capture_request = None
+            self._set_surface_screening_lock(False)
+            self.experiment.set_running(False)
+            self.experiment.status.setText("Surface capture cancelled.")
         if self.experiment_timer.isActive():
             self.experiment_timer.stop()
             self._write_capture_manifest(status="cancelled")
@@ -1013,6 +1202,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if not packets:
             return
         for packet in packets:
+            self._accept_surface_frame(packet)
             self.history.append(packet)
             if self.recorder:
                 self.recorder.append(packet)
@@ -1022,6 +1212,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self.state_label.setText("LIVE")
         if self.tabs.currentIndex() == 0:
             self.original.set_array(latest.image)
+        elif self._surface_view_active():
+            self._active_surface_workspace().set_image(latest.image, (latest.public_metadata() | latest.metadata), from_source=True)
         else:
             self._process()
 
@@ -1053,7 +1245,9 @@ class MainWindow(QtWidgets.QMainWindow):
             self.original.set_array(packet.image)
         if self.recorder:
             self.recorder.append(packet)
-        if self.tabs.currentIndex() != 0:
+        if self._surface_view_active():
+            self._active_surface_workspace().set_image(packet.image, (packet.public_metadata() | packet.metadata), from_source=True)
+        elif self.tabs.currentIndex() != 0:
             self._process()
 
     def _discover_cameras(self) -> None:
@@ -1097,6 +1291,11 @@ class MainWindow(QtWidgets.QMainWindow):
         sender = self.sender()
         if isinstance(sender, BaslerAcquisitionWorker) and sender is not self.camera_worker:
             return
+        if self.surface_capture_timer.isActive():
+            self.surface_capture_timer.stop()
+            self._surface_capture_request = None
+            self._set_surface_screening_lock(False)
+            self.experiment.failed(f"Camera error while waiting for Surface frame: {message}")
         self._camera_error_active = True
         self._camera_error_message = message
         self.camera_timer.stop()
@@ -1141,6 +1340,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self._show_original_metrics()
 
     def _process(self) -> None:
+        if self._surface_view_active():
+            return
         mid = self.method_combo.currentData() if hasattr(self, "method_combo") else None
         if not mid or not self.history:
             return
@@ -1286,9 +1487,49 @@ class MainWindow(QtWidgets.QMainWindow):
         self.visualization_settings = settings
         self._schedule_visualization()
 
+    def _use_surface_input(self, workspace):
+        if self.history:
+            packet = self.history[-1]
+            workspace.set_image(packet.image, packet.public_metadata() | packet.metadata, from_source=True)
+
+    def _active_surface_workspace(self):
+        page = self.tabs.currentWidget()
+        if page is self.fusion_lab:
+            return self.fusion_lab
+        if page in (self.surface_compare_page, self.surface_single_page):
+            return self.surface_lab
+        return None
+
+    def _surface_view_active(self) -> bool:
+        return self._active_surface_workspace() is not None
+
     @QtCore.Slot(int)
     def _active_view_changed(self, index: int) -> None:
         QtCore.QTimer.singleShot(0, self._refit_visible_viewers)
+        workspace = self._active_surface_workspace()
+        surface_active = workspace is not None
+        if hasattr(self, "analysis_dock"):
+            if surface_active and not hasattr(self, "_surface_analysis_was_hidden"):
+                self._surface_analysis_was_hidden = self.analysis_dock.isHidden()
+                self.analysis_dock.hide()
+            elif not surface_active and hasattr(self, "_surface_analysis_was_hidden"):
+                self.analysis_dock.setVisible(not self._surface_analysis_was_hidden)
+                del self._surface_analysis_was_hidden
+        was_active = workspace.active if workspace is not None else False
+        for candidate in (self.surface_lab, self.fusion_lab):
+            active = candidate is workspace
+            if candidate.active != active:
+                candidate.set_active(active)
+        if surface_active:
+            if workspace is self.surface_lab:
+                page = self.tabs.widget(index)
+                page.layout().addWidget(self.surface_lab)
+                self.surface_lab.set_compare(page is self.surface_compare_page)
+                self.surface_lab.show()
+            if self.history and not was_active:
+                packet = self.history[-1]
+                workspace.set_image(packet.image, packet.public_metadata() | packet.metadata, from_source=True)
+            return
         if index == 0:
             if self.last_original is not None:
                 self.original.set_array(self.last_original)
@@ -1522,6 +1763,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.last_original = packet.image
         self.original.set_array(packet.image)
         self.compare_left.set_array(packet.image)
+        if self._surface_view_active():
+            self._active_surface_workspace().set_image(packet.image, packet.public_metadata() | packet.metadata, from_source=True)
+            return
         mid = self.method_combo.currentData()
         parameters = self.params.values()
         if mid:

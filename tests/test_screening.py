@@ -142,3 +142,11 @@ def test_offline_screening_reuses_raw_frames_and_exports_variants(tmp_path) -> N
         "color_overlay50",
     }
     assert all((tmp_path / path).exists() for path in first["images"].values())
+    by_recipe = {recipe.recipe_id: recipe.method_id for recipe in recipes}
+    names = []
+    for output in result["outputs"]:
+        for image in output["images"].values():
+            name = image.rsplit("/", 1)[-1]
+            assert by_recipe[output["recipe_id"]] in name
+            names.append(name)
+    assert len(names) == len(set(names))

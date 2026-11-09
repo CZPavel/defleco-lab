@@ -1,6 +1,9 @@
 # Defleco LAB
 
-Defleco LAB is an independent, experimental Windows desktop laboratory for comparing image-processing methods on reflected dynamic patterns. It is intended for research on local disturbances visible on glossy or specular surfaces using synthetic data, recorded sequences, image sequences, or an explicitly selected Basler camera.
+Defleco LAB is an independent, experimental Windows desktop laboratory for comparing
+image-processing methods on glossy or specular surfaces. It supports both dynamic
+reflected-pattern experiments and static-light Surface LAB filtering, using synthetic
+data, recorded sessions, image sequences, or an explicitly selected Basler camera.
 
 > This is research software, not a calibrated measurement system, production inspection, or safety component. No metrological accuracy is claimed. A bounded hardware smoke test is documented below; optical performance, trigger/PTP behavior, and production throughput remain **NOT TESTED**.
 
@@ -12,12 +15,16 @@ Defleco LAB is an independent, experimental Windows desktop laboratory for compa
 - Integrated full-screen physical pattern output reusing the standalone V02 families: stripes, checkerboard, rings, composite X+Y, nested squares, squircle, spiral/counter-spiral, starburst, speckle and solid field.
 - Explicit pre-processing -> analysis method -> numeric response post-processing -> display pipeline with contextual controls and tooltips.
 - Automated step-and-capture screening foundation that preserves RAW frames, runs a bounded offline recipe set, and exports identifiable grayscale/colour/50% overlay results.
+- Static-light Surface LAB and Surface Compare, with 50 single-frame methods,
+  shared visualization controls and standard/extended full-resolution screening.
 - Multi-frame difference, temporal statistics/median residual, Farneback and DIS optical flow, DIC-like local phase-correlation grid, and temporal response fusion.
 - One-axis image-motion estimation from multiple dedicated Motion ROIs, quality gating, robust median fusion, cumulative position, and masked translation compensation.
 - Deterministic synthetic fringes, grid, checkerboard, speckle, translation, and localized deformation.
 - Raw-frame record/replay so the same sequence can be evaluated repeatedly with different algorithms.
 - Dark PySide6 engineering UI with typed parameters, display-only range/heatmap/alpha controls, shared compare ranges, zoom, pan, presets, Analysis ROIs, and Motion ROIs.
 - CPU image analysis; native-resolution GPU pattern output using OpenGL 3.3. OpenCV CUDA is not required.
+- GPixel Surface Fusion: seven configurable combined enhancement experiments, linked
+  original/result views, native-pixel ROI, presets and a bounded seven-recipe sweep.
 
 ## Install on Windows
 
@@ -64,6 +71,83 @@ After the first installation, `Update Defleco LAB.cmd` performs a safe fast-forw
 powershell -NoProfile -ExecutionPolicy Bypass -File .\install_local_windows.ps1
 ```
 
+## Surface Enhancement LAB (static light)
+
+Open **Surface LAB** for the filtered image alone, or **Surface Compare** for
+side-by-side original/result inspection. Both tabs share the same settings,
+source and processing result; switching views does not recompute the filter.
+These workspaces provide single-image paint/scratch enhancement under static
+lighting. **Open image** preserves Mono/BGR 8/16-bit input; the existing Input source
+also feeds image folders, raw replay and an explicitly selected Basler session.
+Choose a family/method and edit its schema-driven parameters. The two viewers link
+zoom/pan. Preview is bounded to one megapixel; native ROI and full-resolution
+processing are explicit actions. No camera is opened automatically.
+
+The output selector offers enhanced image, grayscale response, heatmap and
+response-dependent transparent overlay. Surface heatmap controls select the original
+or enhanced overlay base, colour map, range, polarity and opacity. The enhanced base
+is selected by default; existing presets without this field retain the original
+base. Display settings do not change the numeric response. Algorithm polarity
+selects features for computation; display polarity remaps the resulting values.
+
+Export saves a PNG/TIFF display image, a JSON sidecar and optionally the unchanged
+float32 response as NPY. Export never overwrites an existing file. Display images
+are 8-bit; NPY retains signed/fractional values. Save/load JSON presets reproduces
+method parameters and display settings. See the [filter catalog](docs/surface-filters.md)
+for purposes, scales, intensity normalization and computational limits. Synthetic
+checks do not establish visibility or detection success on real paint defects.
+
+## GPixel Surface Fusion
+
+The **GPixel Surface Fusion** tab adds K01–K07: CLAHE plus directional morphology,
+multi-scale Hessian, median residual plus Hessian, CLAHE plus FFT, local residual
+plus morphology, CLAHE plus unsharp, and weighted three-branch fusion. Each step
+can be enabled/disabled and configured; intensity controls the final enhancement.
+These experiments improve visual exploration and do not produce defect confidence.
+
+Start with **Open image → K01**, then draw a small ROI and compare **K07** using
+**Process native ROI**. Spatial parameters are native-image pixels even in preview.
+K03/K07 exact float median filters can be slow at full resolution; prefer an ROI
+for the first experiment. Save/load presets and PNG/TIFF + optional NPY + JSON
+reuse the Surface workflow. A file stays selected across tab navigation;
+**Use input source** returns to shared acquisition/replay.
+
+**Screening → Plan → GPixel Surface Fusion** runs just the seven recommended
+configurations on that selected original at full resolution, saving 14 result PNGs
+and metadata. No camera is required for a file-based run. See the
+[recipe and first-test guide](docs/gpixel-surface-fusion.md).
+
+## Surface screening with static light
+
+In **Screening experiment → Plan**, choose **Surface screening** (50 standard
+filter variants, 100 result PNGs) or **Surface screening Extended** (standard plus
+boosted settings, 100 variants, 200 result PNGs). Select an existing parent folder,
+select your Basler camera and start Live, then click **Run Surface screening**.
+The run waits up to five seconds for one fresh camera frame. All filters process
+that same owned source at full resolution; the pattern generator is not used.
+
+Each variant exports **Enhanced** and a **heatmap overlay** using the shared
+Surface heatmap settings. The overlay defaults to the enhanced image but may use
+the original. Colormap, opacity, polarity and auto/fixed/percentile range are taken
+from Surface LAB/Compare at the start of the run. The chosen range is resolved
+from the standard response and reused for the boosted response of the same method.
+The source is saved losslessly once, while the result PNGs are RGB8 display images.
+**Save numerical response (.npy)** is optional and initially off. JSON records the
+source identity, parameters, normalization, display settings, time and outcome.
+Exported image filenames identify the run, method, variant and output, so they can
+be collected into a single folder without losing their method identity.
+
+The job runs sequentially in the background. **Stop** takes effect after the
+current filter and preserves completed results. **Open results** opens the HTML
+gallery, including partial/error runs. **Process existing capture...** can repeat
+a saved Surface capture without a camera, using the selected Surface profile and
+NPY option; every repeat creates a new result directory.
+
+Boosted recipes are versioned experiments, independent of manual Surface LAB
+settings. They change parameters according to the [screening recipe reference](docs/surface-screening.md);
+histogram equalization and percentile stretch instead use a labelled display-only
+enhancement gain. Stronger settings may suppress fine scratches or amplify noise.
+
 ## Quick synthetic experiment
 
 1. Start with `Synthetic` and `fringes`.
@@ -83,7 +167,7 @@ source -> immutable FramePacket -> bounded frame history -> processing method ->
 
 Algorithms implement a common metadata-rich interface; the parameter panel is generated from each method schema and hides controls that are irrelevant to the selected output. Camera-specific objects do not enter processing code.
 
-For the integrated physical PoC workflow, see the [quick operator guide](docs/operator-guide.md). The persistent [development plan and context tracker](docs/development-plan.md) records what is implemented, what still needs physical validation, and the next experiment steps. See also [architecture](docs/architecture.md), [methods](docs/methods.md), [motion compensation](docs/motion-compensation.md), and [session format](docs/session-format.md).
+For the integrated physical PoC workflow, see the [quick operator guide](docs/operator-guide.md). The [functionality overview](docs/functionality-overview.md) describes the complete application and its workflows. The persistent [development plan and context tracker](docs/development-plan.md) records what is implemented, what still needs physical validation, and the next experiment steps. See also [architecture](docs/architecture.md), [methods](docs/methods.md), [motion compensation](docs/motion-compensation.md), and [session format](docs/session-format.md).
 
 ### Live runtime behavior
 
