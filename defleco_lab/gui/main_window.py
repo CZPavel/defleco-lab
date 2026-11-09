@@ -210,7 +210,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tabs.addTab(compare, "Compare")
         self.tabs.addTab(self.motion_debug, "Motion Debug")
         self.surface_lab = SurfaceLab()
-        self.tabs.addTab(self.surface_lab, "Surface LAB")
+        self.surface_compare_page = QtWidgets.QWidget()
+        self.surface_single_page = QtWidgets.QWidget()
+        for page in (self.surface_compare_page, self.surface_single_page):
+            layout = QtWidgets.QVBoxLayout(page)
+            layout.setContentsMargins(0, 0, 0, 0)
+        self.surface_compare_page.layout().addWidget(self.surface_lab)
+        self.tabs.addTab(self.surface_compare_page, "Surface Compare")
+        self.tabs.addTab(self.surface_single_page, "Surface LAB")
         self.tabs.currentChanged.connect(self._active_view_changed)
         self.original.pixelHovered.connect(
             lambda x, y, v: self.statusBar().showMessage(f"Pixel x={x}, y={y}, value={v}")
@@ -1029,7 +1036,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.state_label.setText("LIVE")
         if self.tabs.currentIndex() == 0:
             self.original.set_array(latest.image)
-        elif self.tabs.currentWidget() is self.surface_lab:
+        elif self._surface_view_active():
             self.surface_lab.set_image(latest.image, (latest.public_metadata() | latest.metadata))
         else:
             self._process()
@@ -1062,7 +1069,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.original.set_array(packet.image)
         if self.recorder:
             self.recorder.append(packet)
-        if self.tabs.currentWidget() is self.surface_lab:
+        if self._surface_view_active():
             self.surface_lab.set_image(packet.image, (packet.public_metadata() | packet.metadata))
         elif self.tabs.currentIndex() != 0:
             self._process()
@@ -1152,7 +1159,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._show_original_metrics()
 
     def _process(self) -> None:
-        if self.tabs.currentWidget() is self.surface_lab:
+        if self._surface_view_active():
             return
         mid = self.method_combo.currentData() if hasattr(self, "method_combo") else None
         if not mid or not self.history:
@@ -1299,10 +1306,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self.visualization_settings = settings
         self._schedule_visualization()
 
+    def _surface_view_active(self) -> bool:
+        return self.tabs.currentWidget() in (
+            self.surface_compare_page,
+            self.surface_single_page,
+        )
+
     @QtCore.Slot(int)
     def _active_view_changed(self, index: int) -> None:
         QtCore.QTimer.singleShot(0, self._refit_visible_viewers)
-        surface_active = self.tabs.widget(index) is self.surface_lab
+        surface_active = self._surface_view_active()
         if hasattr(self, "analysis_dock"):
             if surface_active and not hasattr(self, "_surface_analysis_was_hidden"):
                 self._surface_analysis_was_hidden = self.analysis_dock.isHidden()
@@ -1310,9 +1323,15 @@ class MainWindow(QtWidgets.QMainWindow):
             elif not surface_active and hasattr(self, "_surface_analysis_was_hidden"):
                 self.analysis_dock.setVisible(not self._surface_analysis_was_hidden)
                 del self._surface_analysis_was_hidden
-        self.surface_lab.set_active(surface_active)
-        if self.tabs.widget(index) is self.surface_lab:
-            if self.history:
+        was_surface_active = self.surface_lab.active
+        if surface_active != was_surface_active:
+            self.surface_lab.set_active(surface_active)
+        if surface_active:
+            page = self.tabs.widget(index)
+            page.layout().addWidget(self.surface_lab)
+            self.surface_lab.set_compare(page is self.surface_compare_page)
+            self.surface_lab.show()
+            if self.history and not was_surface_active:
                 packet = self.history[-1]
                 self.surface_lab.set_image(packet.image, packet.public_metadata() | packet.metadata)
             return
@@ -1549,7 +1568,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.last_original = packet.image
         self.original.set_array(packet.image)
         self.compare_left.set_array(packet.image)
-        if self.tabs.currentWidget() is self.surface_lab:
+        if self._surface_view_active():
             self.surface_lab.set_image(packet.image, packet.public_metadata() | packet.metadata)
             return
         mid = self.method_combo.currentData()

@@ -66,7 +66,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\install_local_windows.ps1
 
 ## Surface Enhancement LAB (static light)
 
-Open the **Surface LAB** tab for single-image paint/scratch enhancement under static
+Open **Surface LAB** for the filtered image alone, or **Surface Compare** for
+side-by-side original/result inspection. Both tabs share the same settings,
+source and processing result; switching views does not recompute the filter.
+These workspaces provide single-image paint/scratch enhancement under static
 lighting. **Open image** preserves Mono/BGR 8/16-bit input; the existing Input source
 also feeds image folders, raw replay and an explicitly selected Basler session.
 Choose a family/method and edit its schema-driven parameters. The two viewers link

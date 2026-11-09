@@ -59,7 +59,7 @@ def test_surface_tab_does_not_submit_legacy_processing():
     application = app()
     window = MainWindow()
     try:
-        window.tabs.setCurrentWidget(window.surface_lab)
+        window.tabs.setCurrentWidget(window.surface_compare_page)
         called = []
         window.processor.submit = lambda request: called.append(request)
         from defleco_lab.camera.frame_packet import FramePacket
@@ -77,14 +77,43 @@ def test_surface_tab_restores_analysis_dock_visibility():
     window = MainWindow()
     try:
         window.analysis_dock.show()
-        window.tabs.setCurrentWidget(window.surface_lab)
+        window.tabs.setCurrentWidget(window.surface_compare_page)
         assert window.analysis_dock.isHidden()
         window.tabs.setCurrentIndex(0)
         assert not window.analysis_dock.isHidden()
         window.analysis_dock.hide()
-        window.tabs.setCurrentWidget(window.surface_lab)
+        window.tabs.setCurrentWidget(window.surface_compare_page)
         window.tabs.setCurrentIndex(0)
         assert window.analysis_dock.isHidden()
+    finally:
+        window.close()
+        application.processEvents()
+
+
+def test_surface_single_and_compare_share_result_without_reprocessing():
+    application = app()
+    window = MainWindow()
+    try:
+        window.tabs.setCurrentWidget(window.surface_compare_page)
+        lab = window.surface_lab
+        assert wait_for(application, lambda: lab.snapshot is not None)
+        snapshot = lab.snapshot
+        lab.worker.submit = lambda request: (_ for _ in ()).throw(
+            AssertionError("Changing the surface view must not recompute the result")
+        )
+        window.tabs.setCurrentWidget(window.surface_single_page)
+        assert window.tabs.tabText(window.tabs.currentIndex()) == "Surface LAB"
+        assert lab.parentWidget() is window.surface_single_page
+        assert lab.original_panel.isHidden()
+        assert not lab.result_view.isHidden()
+        assert lab.roi_view() is lab.result_view
+        assert lab.snapshot is snapshot
+        assert window.analysis_dock.isHidden()
+        window.tabs.setCurrentWidget(window.surface_compare_page)
+        assert window.tabs.tabText(window.tabs.currentIndex()) == "Surface Compare"
+        assert not lab.original_panel.isHidden()
+        assert lab.roi_view() is lab.original
+        assert lab.snapshot is snapshot
     finally:
         window.close()
         application.processEvents()

@@ -13,6 +13,9 @@ Status legend:
 
 ## Surface Enhancement LAB — 2026-11-09
 
+- [x] Surface Compare shows original/result side by side; Surface LAB shows only
+      the filtered result. Both reuse one workspace, settings and worker.
+
 - [x] Independent two-view static-light workspace using existing source paths,
       viewer, parameter schema and processing plug-in contracts.
 - [x] Surface filter families A–H, documented in [surface-filters.md](surface-filters.md).

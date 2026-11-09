@@ -157,6 +157,7 @@ class SurfaceLab(QtWidgets.QWidget):
         layout = QtWidgets.QHBoxLayout(self)
         self.original, self.result_view = ImageViewer(), ImageViewer()
         views = QtWidgets.QSplitter()
+        self.compare = True
         for title, viewer in (("Original", self.original), ("Result", self.result_view)):
             panel = QtWidgets.QWidget()
             column = QtWidgets.QVBoxLayout(panel)
@@ -164,6 +165,8 @@ class SurfaceLab(QtWidgets.QWidget):
             column.addWidget(QtWidgets.QLabel(title))
             column.addWidget(viewer, 1)
             views.addWidget(panel)
+            if viewer is self.original:
+                self.original_panel = panel
         self.original.viewTransformChanged.connect(self.result_view.apply_view_transform)
         self.result_view.viewTransformChanged.connect(self.original.apply_view_transform)
         for axis in ("horizontalScrollBar", "verticalScrollBar"):
@@ -216,8 +219,8 @@ class SurfaceLab(QtWidgets.QWidget):
             form.addRow(label, widget)
         for label, callback in [
             ("Open image", self.open_image),
-            ("Draw ROI", lambda: self.original.begin_roi("analysis")),
-            ("Clear ROI", lambda: self.original.clear_rois("analysis")),
+            ("Draw ROI", lambda: self.roi_view().begin_roi("analysis")),
+            ("Clear ROI", lambda: self.roi_view().clear_rois("analysis")),
             ("Process native ROI", self.process_roi),
             ("Process full resolution", self.process_full),
             ("Resume preview", self.resume_preview),
@@ -313,6 +316,7 @@ class SurfaceLab(QtWidgets.QWidget):
         self.source_metadata = dict(metadata or {})
         if shape_changed:
             self.original.clear_rois("analysis")
+            self.result_view.clear_rois("analysis")
         if not self.native_inflight:
             self.submit()
 
@@ -340,8 +344,15 @@ class SurfaceLab(QtWidgets.QWidget):
         )
         self.status.setText("Processing…")
 
+    def set_compare(self, enabled):
+        self.compare = enabled
+        self.original_panel.setVisible(enabled)
+
+    def roi_view(self):
+        return self.original if self.compare else self.result_view
+
     def process_roi(self):
-        rois = [r for r in self.original.rois("analysis") if r["enabled"]]
+        rois = [r for r in self.roi_view().rois("analysis") if r["enabled"]]
         if len(rois) != 1:
             self.status.setText("Draw exactly one enabled analysis ROI.")
             return
