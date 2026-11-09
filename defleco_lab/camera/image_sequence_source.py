@@ -25,6 +25,7 @@ def load_image_sequence(folder: Path) -> list[FramePacket]:
                     host_timestamp_ns=perf_counter_ns(),
                     pixel_format="loaded",
                     source="image-sequence",
+                    metadata={"source_filename": str(path.resolve())},
                 )
             )
     if not packets:

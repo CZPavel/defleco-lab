@@ -41,6 +41,28 @@ frame requirement, help, limitations, references, editable parameters, and optio
 parameter-visibility dependencies. Changing an output therefore exposes only the
 controls relevant to that output.
 
+## Surface Enhancement LAB
+
+The static-light workspace uses its own `MethodRegistry` with the existing
+`ProcessingMethod` / `MethodInfo` / `ProcessingResult` contracts. It does not add
+single-frame surface methods to the established deflectometry selector. Acquisition
+continues through the same owned `FramePacket` source; image sequences retain the
+original filename as packet metadata. `main_window.py` only forwards current frames
+and coordinates workspace visibility/shutdown.
+
+Surface processing runs in a separate bounded latest-wins Qt worker. It normalizes
+the complete source before ROI cropping so float min/max normalization does not
+change between ROI and full-frame processing. Preview can reduce resolution but
+never increases it. Native ROI/full-resolution calculations are explicit. Numeric
+float32 output and optional normalized enhanced image remain separate from the
+RGB8 presentation, export and JSON configuration. The worker snapshots source,
+method, parameters, ROI and display settings together to keep exports reproducible.
+
+Surface display mapping reuses `VisualizationTransform`; overlay transparency is
+weighted by displayed response strength. The sidecar records processing/source shape,
+source intensity metadata, method diagnostics, ROI and visualization configuration.
+PNG/TIFF hold display images, while optional NPY holds the numerical response.
+
 ## Pattern output
 
 The physical pattern generator is part of the same application but remains

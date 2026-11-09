@@ -11,6 +11,21 @@ Status legend:
 - [~] implemented as a usable first version, still needs physical validation/refinement
 - [ ] planned / not implemented yet
 
+## Surface Enhancement LAB — 2026-11-09
+
+- [x] Independent two-view static-light workspace using existing source paths,
+      viewer, parameter schema and processing plug-in contracts.
+- [x] Surface filter families A–H, documented in [surface-filters.md](surface-filters.md).
+- [x] Bounded background processing, reduced preview, explicit native ROI/full frame.
+- [x] Separate numeric response and enhanced/grayscale/heatmap/transparent-overlay display.
+- [x] Non-overwriting PNG/TIFF + JSON export and optional float32 NPY; JSON presets.
+- [x] Python 3.11 Windows environment updated with scikit-image ridge-filter support.
+- [ ] Evaluate actual static-light glossy paint images with manually identified
+      scratches, healthy reference regions and varied glare/illumination.
+- [ ] Select useful parameter ranges from those images; synthetic structure response
+      is software evidence and cannot establish defect visibility or detection accuracy.
+- [ ] Optional wavelet/notch extensions only after a real-image need is established.
+
 ## Current experimental objective
 
 The immediate goal is not calibrated 3D metrology. It is to find combinations of

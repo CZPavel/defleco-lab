@@ -64,6 +64,27 @@ After the first installation, `Update Defleco LAB.cmd` performs a safe fast-forw
 powershell -NoProfile -ExecutionPolicy Bypass -File .\install_local_windows.ps1
 ```
 
+## Surface Enhancement LAB (static light)
+
+Open the **Surface LAB** tab for single-image paint/scratch enhancement under static
+lighting. **Open image** preserves Mono/BGR 8/16-bit input; the existing Input source
+also feeds image folders, raw replay and an explicitly selected Basler session.
+Choose a family/method and edit its schema-driven parameters. The two viewers link
+zoom/pan. Preview is bounded to one megapixel; native ROI and full-resolution
+processing are explicit actions. No camera is opened automatically.
+
+The output selector offers enhanced image, grayscale response, heatmap and
+response-dependent transparent overlay. Display range, polarity and opacity affect
+presentation separately from the numeric response. Algorithm polarity selects which
+features are computed; display polarity only remaps the resulting values.
+
+Export saves a PNG/TIFF display image, a JSON sidecar and optionally the unchanged
+float32 response as NPY. Export never overwrites an existing file. Display images
+are 8-bit; NPY retains signed/fractional values. Save/load JSON presets reproduces
+method parameters and display settings. See the [filter catalog](docs/surface-filters.md)
+for purposes, scales, intensity normalization and computational limits. Synthetic
+checks do not establish visibility or detection success on real paint defects.
+
 ## Quick synthetic experiment
 
 1. Start with `Synthetic` and `fringes`.

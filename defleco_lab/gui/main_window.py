@@ -25,6 +25,7 @@ from .image_viewer import ImageViewer
 from .parameter_panel import ParameterPanel
 from .pattern_output import PatternControlPanel
 from .pipeline_panel import PostprocessingPanel, PreprocessingPanel
+from .surface_lab import SurfaceLab
 from .visualization import VisualizationPanel, VisualizationSettings, VisualizationTransform
 
 
@@ -208,6 +209,8 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self.tabs.addTab(compare, "Compare")
         self.tabs.addTab(self.motion_debug, "Motion Debug")
+        self.surface_lab = SurfaceLab()
+        self.tabs.addTab(self.surface_lab, "Surface LAB")
         self.tabs.currentChanged.connect(self._active_view_changed)
         self.original.pixelHovered.connect(
             lambda x, y, v: self.statusBar().showMessage(f"Pixel x={x}, y={y}, value={v}")
@@ -749,6 +752,10 @@ class MainWindow(QtWidgets.QMainWindow):
             self._record_stop()
         except (OSError, TimeoutError) as exc:
             self.statusBar().showMessage(f"Recorder shutdown error: {exc}")
+        if not self.surface_lab.shutdown():
+            self.statusBar().showMessage("Surface worker did not stop; close postponed")
+            event.ignore()
+            return
         if not self.processor.stop():
             self.statusBar().showMessage("Processing worker did not stop; close postponed")
             event.ignore()
@@ -1022,6 +1029,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self.state_label.setText("LIVE")
         if self.tabs.currentIndex() == 0:
             self.original.set_array(latest.image)
+        elif self.tabs.currentWidget() is self.surface_lab:
+            self.surface_lab.set_image(latest.image, (latest.public_metadata() | latest.metadata))
         else:
             self._process()
 
@@ -1053,7 +1062,9 @@ class MainWindow(QtWidgets.QMainWindow):
             self.original.set_array(packet.image)
         if self.recorder:
             self.recorder.append(packet)
-        if self.tabs.currentIndex() != 0:
+        if self.tabs.currentWidget() is self.surface_lab:
+            self.surface_lab.set_image(packet.image, (packet.public_metadata() | packet.metadata))
+        elif self.tabs.currentIndex() != 0:
             self._process()
 
     def _discover_cameras(self) -> None:
@@ -1141,6 +1152,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self._show_original_metrics()
 
     def _process(self) -> None:
+        if self.tabs.currentWidget() is self.surface_lab:
+            return
         mid = self.method_combo.currentData() if hasattr(self, "method_combo") else None
         if not mid or not self.history:
             return
@@ -1289,6 +1302,20 @@ class MainWindow(QtWidgets.QMainWindow):
     @QtCore.Slot(int)
     def _active_view_changed(self, index: int) -> None:
         QtCore.QTimer.singleShot(0, self._refit_visible_viewers)
+        surface_active = self.tabs.widget(index) is self.surface_lab
+        if hasattr(self, "analysis_dock"):
+            if surface_active and not hasattr(self, "_surface_analysis_was_hidden"):
+                self._surface_analysis_was_hidden = self.analysis_dock.isHidden()
+                self.analysis_dock.hide()
+            elif not surface_active and hasattr(self, "_surface_analysis_was_hidden"):
+                self.analysis_dock.setVisible(not self._surface_analysis_was_hidden)
+                del self._surface_analysis_was_hidden
+        self.surface_lab.set_active(surface_active)
+        if self.tabs.widget(index) is self.surface_lab:
+            if self.history:
+                packet = self.history[-1]
+                self.surface_lab.set_image(packet.image, packet.public_metadata() | packet.metadata)
+            return
         if index == 0:
             if self.last_original is not None:
                 self.original.set_array(self.last_original)
@@ -1522,6 +1549,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.last_original = packet.image
         self.original.set_array(packet.image)
         self.compare_left.set_array(packet.image)
+        if self.tabs.currentWidget() is self.surface_lab:
+            self.surface_lab.set_image(packet.image, packet.public_metadata() | packet.metadata)
+            return
         mid = self.method_combo.currentData()
         parameters = self.params.values()
         if mid:
